@@ -1,0 +1,5 @@
+torch
+transformers
+datasets
+qwen-vl-utils
+pyyaml
