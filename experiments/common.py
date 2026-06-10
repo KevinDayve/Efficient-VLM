@@ -162,7 +162,7 @@ def load_nextqa_dev(
     """
     from datasets import load_dataset
 
-    ds = load_dataset(dataset_name, split=split)
+    ds = load_dataset(dataset_name, "MC", split=split)
     if len(ds) == 0:
         raise ValueError(f"{dataset_name}:{split} is empty")
 
