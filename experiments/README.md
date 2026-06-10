@@ -13,7 +13,7 @@ B/C/D read from, so in practice: run **A**, plug its layers into **B/C/D**.
 
 | Item | Value |
 |------|-------|
-| Backbone | `Qwen/Qwen2.5-VL-7B-Instruct`, frozen, **`attn_implementation="eager"`** |
+| Backbone | `Qwen/Qwen2.5-VL-3B-Instruct`, frozen, **`attn_implementation="eager"`** |
 | Dev set | ~300–500 NExT-QA val MC pairs |
 | Retention ratios ρ | `{0.10, 0.20, 0.25, 0.50}` |
 | Frame budget | `--max_frames 8` (report it; token counts depend on it) |
@@ -38,7 +38,7 @@ information ceiling we want. Wall-clock savings are a separate, later measuremen
 ```bash
 # A — critical-layer localization (sliding-window knockout)
 python -m experiments.exp_a_layer_localization \
-    --model_name Qwen/Qwen2.5-VL-7B-Instruct \
+    --model_name Qwen/Qwen2.5-VL-3B-Instruct \
     --video_root /path/to/nextqa/videos --window 3 --max_pairs 400
 
 # Plug A's recommended layers into B, C, D via --layers

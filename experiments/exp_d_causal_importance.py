@@ -127,7 +127,7 @@ def run(args):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Experiment D: attention vs causal importance.")
-    p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-7B-Instruct")
+    p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--dataset_name", default="lmms-lab/NExTVideo")
     p.add_argument("--split", default="test")
     p.add_argument("--video_root", required=True)
