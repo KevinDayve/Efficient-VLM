@@ -54,6 +54,48 @@ class Scorer(nn.Module):
         logits = self.head(xhat).squeeze(-1) # B, L
         return logits
     
+    def allocate_budget(self, logits: torch.Tensor, T: int, K: int, k_min: int = 4) -> torch.Tensor:
+        """
+        Args:
+            logits: (B, T*N)
+        Returns:
+            integer budgets (B, T) that sum exactly K, floored at k_min.
+        """
+        B, L = logits.shape
+        N = L // T
+        binMass = torch.sigmoid(logits).view(B, T, N).view(dim=-1)
+        spendable = K - k_min * T
+        assert spendable >= 0, "K too small. Please alter the budget."
+        frac = spendable * binMass / binMass.sum(dim=-1, keepdim=True)
+        k_t = k_min + frac.floor().long()
+        for b in range(B):
+            deficit = K - int(k_t[b].sum())
+            if deficit > 0:
+                remaining = frac[b] - frac[b].floor()
+                top = torch.topk(remaining, deficit).indices
+                k_t[b, top] += 1
+        return k_t.clamp(max=N)
+    
+    def select_stratified(self, x: torch.Tensor, T: int, K: int, k_min: int = 4) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Given embeddings, returns kept embeddings and original indicies for M-RoPE positional ids. Derives per-bin topK with scorer-derived budgets.
+        """
+        B, L, dim = x.shape
+        N = L // T
+        logits = self.forward(x)
+        k_t = self.allocate_budget(logits, T, K, k_min)
+        kept_idx = []
+        for b in range(B):
+            idx_b = []
+            for t in range(T):
+                seg = logits[b, t*N:(t+1)*N]
+                top = torch.topk(seg, int(k_t[b, t])).indices + t * N
+                idx_b.append(top)
+            kept_idx.append(torch.cat(idx_b).sort().values)
+        kept_idx = torch.stack(kept_idx)
+        feat_kept = torch.gather(x, 1, kept_idx.unsqueeze(-1).expand(-1, -1, dim))
+        return feat_kept, kept_idx
+    
     def select_topk(self, x: torch.Tensor, k: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Method for inference convenience.

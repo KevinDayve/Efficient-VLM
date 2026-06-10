@@ -5,6 +5,7 @@ import os
 import warnings
 import argparse
 import torch
+from scipy.stats import spearmanr
 import torch.nn as nn
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
 from datasets import load_dataset
@@ -133,7 +134,7 @@ def train(args):
                 attn_extractor._store.clear()
                 continue
             targets = targets.to(device)
-            loss = listmle_loss(logits, targets)
+            loss = listmle_loss(logits, targets, top_m=args.top_m)
             optimiser.zero_grad()
 
             loss.backward()
@@ -145,7 +146,8 @@ def train(args):
             cumulativeLoss += loss.item()
             step += 1
             if step % args.log_interval == 0:
-                print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}")
+                rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
+                print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}")
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
@@ -163,6 +165,9 @@ def parse_args():
     arguments.add_argument("--max_steps", type=int, default=10000, help='The number of steps to train the scorer module.')
     arguments.add_argument("--log_interval", type=int, default=500, help='The interval (in steps) at which to log the training loss.')
     arguments.add_argument("--save_every", type=int, default=1000, help='The interval (in steps) at which to save model checkpoints.')
+    arguments.add_argument("--top_m", type=int, default=None, help="The listmle loss to run over top m tokens to avoid noisy gradients. Defaults to `None`.")
+    arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
+    arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
     return arguments.parse_args()
 
 if __name__ == "__main__":
