@@ -14,13 +14,24 @@ from datasets import load_dataset
 from qwen_vl_utils import process_vision_info
 
 
-def get_patch_embeds(model: Qwen2_5_VLForConditionalGeneration, pixel_values: torch.Tensor, video_grid_thw: torch.Tensor) -> torch.Tensor:
+def get_patch_embeds(model: Qwen2_5_VLForConditionalGeneration, pixel_values: torch.Tensor, video_grid_thw: torch.Tensor, n_video: int = None) -> torch.Tensor:
+    base = getattr(model, "model", model)
+    visual = base.visual
     with torch.no_grad():
-        embeddings = model.model.visual(
-            pixel_values,
-            grid_thw=video_grid_thw
-        )
-    return embeddings.unsqueeze(0)
+        out = visual(pixel_values, grid_thw=video_grid_thw)
+    # Some HF versions wrap the output; unwrap to the feature tensor.
+    feats = out if isinstance(out, torch.Tensor) else out.last_hidden_state
+    if feats.dim() == 3:
+        feats = feats.squeeze(0)
+    # If the tower returned pre-merger tokens, apply the spatial merger so the
+    # token count lines up 1:1 with the video placeholders (and the teacher scores).
+    if n_video is not None and feats.shape[0] != n_video:
+        if hasattr(visual, "merger"):
+            feats = visual.merger(feats)
+        else:
+            ratio = feats.shape[0] // n_video
+            feats = feats[: ratio * n_video].view(n_video, ratio, -1).mean(dim=1)
+    return feats.unsqueeze(0)
 
 def count_video_tokens(input_ids: torch.Tensor, video_token_id: int) -> int:
     return (input_ids == video_token_id).sum().item()
@@ -157,7 +168,9 @@ def train(args):
             if video_positions.numel() == 0:
                 continue
             attn_extractor.video_positions = video_positions
-            patch_embeds = get_patch_embeds(model, pixel_values, video_grid_thw).to(device)
+            patch_embeds = get_patch_embeds(
+                model, pixel_values, video_grid_thw, n_video=video_positions.numel()
+            ).to(device)
 
             # forward for the scoring module;
             logits = scorer(patch_embeds)
