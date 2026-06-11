@@ -1,4 +1,4 @@
-from efficient_vlm.attention_extractor import AttentionExtractor, StopForwardPass
+from efficient_vlm.attention_extractor import AttentionExtractor
 from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
 import os
@@ -181,24 +181,21 @@ def train(args):
                 print(f"Scorer built: input_dim={patch_embeds.shape[-1]}, "
                       f"{sum(p.numel() for p in scorer.parameters()) / 1e3:.0f}K params")
 
-            # forward for the scoring module;
-            logits = scorer(patch_embeds)
-            with attn_extractor:
-                with torch.no_grad():
-                    try:
-                        model(
-                            input_ids=input_ids,
-                            attention_mask=inputs['attention_mask'].to(device),
-                            pixel_values=pixel_values,
-                            video_grid_thw=video_grid_thw,
-                            output_attentions=True,
-                        )
-                    except StopForwardPass:
-                        pass  # truncated at the last critical layer; attention already captured
-            targets = attn_extractor.get_scores()
+            # forward for the scoring module; keep the scorer in fp32 (stable for
+            # LayerNorm/AdamW) and cast the fp16 features up to match its weights.
+            logits = scorer(patch_embeds.float())
+            with torch.no_grad():
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=inputs['attention_mask'].to(device),
+                    pixel_values_videos=pixel_values,
+                    video_grid_thw=video_grid_thw,
+                    output_attentions=True,
+                )
+            targets = attn_extractor.scores_from_attentions(outputs.attentions)
+            del outputs
             if targets is None:
                 warnings.warn("No attention scores extracted. Thus, skipping this sample.")
-                attn_extractor._store.clear()
                 continue
             targets = targets.to(device)
             loss = listmle_loss(logits, targets, top_m=args.top_m)
@@ -209,7 +206,6 @@ def train(args):
             optimiser.step()
             scheduler.step()
 
-            attn_extractor._store.clear()
             cumulativeLoss += loss.item()
             step += 1
             if step % args.log_interval == 0:
