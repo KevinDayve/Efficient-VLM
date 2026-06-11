@@ -33,16 +33,40 @@ from tqdm import tqdm
 from experiments import common
 
 
-def sliding_windows(n_layers: int, window: int, stride: int = 1) -> List[List[int]]:
-    return [list(range(s, s + window)) for s in range(0, n_layers - window + 1, stride)]
+PAPER_RANGES = [
+    [1, 2, 3, 4, 5],
+    [6, 7, 8, 9, 10, 11],
+    [12, 13, 14, 15, 16],
+    [17, 18, 19, 20, 21, 22],
+    [23, 24, 25, 26, 27, 28],
+    [29, 30, 31, 32, 33, 34, 35],
+]
+
+
+def sliding_windows(n_layers: int, window: int, stride: int = 1,
+                    layer_min: int = 0, layer_max: int = None) -> List[List[int]]:
+    if layer_max is None:
+        layer_max = n_layers
+    starts = range(layer_min, min(layer_max, n_layers) - window + 1, stride)
+    return [list(range(s, s + window)) for s in starts]
+
+
+def build_windows(n_layers: int, args) -> List[List[int]]:
+    if args.paper_ranges:
+        # Four coarse non-overlapping blocks from §3.4
+        return [r for r in PAPER_RANGES if max(r) < n_layers]
+    # Focused fine-grained sweep over layers 8-20, then full sweep if requested
+    return sliding_windows(n_layers, args.window, args.stride,
+                           layer_min=args.sweep_min, layer_max=args.sweep_max)
 
 
 def run(args):
     common.set_seed(args.seed)
     model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
     n_layers = len(common.get_decoder_layers(model))
-    windows = sliding_windows(n_layers, args.window, args.stride)
-    print(f"{n_layers} decoder layers -> {len(windows)} windows of size {args.window}")
+    windows = build_windows(n_layers, args)
+    mode = "paper ranges" if args.paper_ranges else f"sliding window size={args.window} layers={args.sweep_min}-{args.sweep_max}"
+    print(f"{n_layers} decoder layers -> {len(windows)} windows ({mode})")
 
     samples = common.load_nextqa_dev(
         args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
@@ -126,6 +150,13 @@ def parse_args():
     p.add_argument("--max_frames", type=int, default=8)
     p.add_argument("--window", type=int, default=3, help="sliding window size (2-4)")
     p.add_argument("--stride", type=int, default=1)
+    p.add_argument("--sweep_min", type=int, default=8,
+                   help="first layer to include in focused sliding sweep")
+    p.add_argument("--sweep_max", type=int, default=21,
+                   help="one past the last layer in focused sliding sweep (default covers 8-20)")
+    p.add_argument("--paper_ranges", action="store_true",
+                   help="use the four coarse non-overlapping ranges from the paper (§3.4) "
+                        "instead of a sliding window")
     p.add_argument("--top_k", type=int, default=5, help="how many top windows to report")
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--seed", type=int, default=42)

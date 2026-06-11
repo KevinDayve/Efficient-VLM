@@ -47,7 +47,7 @@ def run(args):
     common.set_seed(args.seed)
     model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
 
-    strategies = ["oracle", "uniform", "kitoke"]
+    strategies = ["oracle", "stratified_oracle", "uniform", "kitoke"]
     if args.include_norm:
         strategies.append("norm")
 
@@ -81,11 +81,14 @@ def run(args):
             features = common.get_video_features(model, prepared)
 
         n_video = prepared.n_video
+        n_frames = int(prepared.video_grid_thw[0, 0].item()) if prepared.video_grid_thw is not None else 1
         for rho in args.rhos:
             k = common.k_from_rho(n_video, rho)
             for strat in strategies:
                 if strat == "oracle":
                     kept = common.select_topk_scores(scores, k)
+                elif strat == "stratified_oracle":
+                    kept = common.select_stratified_topk(scores, k, n_frames)
                 elif strat == "uniform":
                     kept = common.select_uniform(n_video, k, device=scores.device)
                 elif strat == "kitoke":

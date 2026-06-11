@@ -69,6 +69,61 @@ decision/kill-criterion.
 | C | How query-dependent is the optimal token set? | Large per-question gap ⇒ scorer must be query-conditioned. |
 | D | Does attention magnitude track causal importance? | Weak Spearman ⇒ change the supervision target. |
 
+## Phase 1 — Component validation (run after Phase 0 passes)
+
+| Exp | What it does | Training? |
+|-----|-------------|-----------|
+| **E** | Norm-asymmetry (contribution 4): keep high- vs low-L2-norm tokens vs uniform across ρ | No |
+| **F** | Distillation fidelity: train the query-blind scorer, measure top-k recall + NDCG vs the teacher ranking | Yes (the scorer) |
+
+```bash
+# E — norm asymmetry (training-free; add --include_oracle for the upper bound)
+python -m experiments.exp_e_norm_asymmetry \
+    --video_root /path/to/videos --rhos 0.10 0.20 0.25 0.50
+
+# F — distillation fidelity (trains the scorer, saves a checkpoint for G's "ours")
+python -m experiments.exp_f_distillation_fidelity \
+    --video_root /path/to/videos --layers 12 13 14 15 16 \
+    --epochs 10 --checkpoint checkpoints/scorer_qblind.pt
+```
+
+E motivates the learned scorer (norm ranks "junk" but not "important"). F is the
+gate before downstream eval: high recall/NDCG means the MLP learned the signal,
+so any later miss is the *signal's* fault, not the scorer's. F is query-blind;
+the query-conditioned variant is a follow-up, only needed if Exp C showed a large
+gap.
+
+## Phase 2 — Main results and ablations
+
+| Exp | What it does |
+|-----|-------------|
+| **G** | Main table: accuracy **+ selection wallclock** across ρ for each strategy |
+| **H** | Ablations: supervision source, layer range, three-way selection (top-k / uniform-per-bin / Pareto-adaptive) |
+
+```bash
+# G — main table (needs F's checkpoint for "ours")
+python -m experiments.exp_g_main_table \
+    --video_root /path/to/videos --layers 12 13 14 15 16 \
+    --strategies uniform fastv kitoke attention_oracle ours \
+    --scorer_ckpt checkpoints/scorer_qblind.pt
+
+# H — ablations (all three by default; or --ablation supervision|layers|selection)
+python -m experiments.exp_h_ablations \
+    --video_root /path/to/videos --layers 12 13 14 15 16 \
+    --layer_sets 4,5,6 12,13,14,15,16 20,21,22
+```
+
+**What's real vs. stubbed in G.** Implemented directly: `full, uniform, random,
+norm_high, norm_low, kitoke (approx), fastv, attention_oracle, ours`. Registered
+as explicit stubs that raise `NotImplementedError` (they need the authors'
+reference code — don't fake a head-to-head number): `l1_delta, dycoke,
+learnpruner, score`. Wire the official implementations into the `STRATEGIES`
+registry in [exp_g_main_table.py](exp_g_main_table.py). FastV (the stated foil)
+and LearnPruner (closest neighbour) are the non-optional comparisons.
+
+To run the table on **VideoMME / MVBench / EgoSchema**, point `--dataset_name`
+at the relevant mirror and add its field layout to `common.py`'s `_*_KEYS`.
+
 ## Assumptions to verify on your machine
 
 1. **Dataset fields.** `common.load_nextqa_dev` tries several known NExT-QA

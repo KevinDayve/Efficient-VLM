@@ -341,35 +341,81 @@ def mc_evaluate(
 # --------------------------------------------------------------------------- #
 # Language -> video attention (teacher / oracle scores)
 # --------------------------------------------------------------------------- #
-def language_to_video_scores(
+def _query_rows(prepared: PreparedInputs, source: str) -> torch.Tensor:
+    """Which query rows to aggregate attention over, per supervision source.
+
+    * ``"language"`` -- post-video text tokens (the paper's signal).
+    * ``"all"``      -- every query row (all-token-average baseline).
+    * ``"cls"``      -- a single summary row. Decoder LLMs have no CLS token, so
+                        we use the final (generation-prompt) position as the
+                        closest analogue and document it as such.
+    """
+    if source == "language":
+        return prepared.lang_positions
+    if source == "all":
+        return torch.arange(prepared.seq_len, device=prepared.lang_positions.device)
+    if source == "cls":
+        return torch.tensor([prepared.seq_len - 1], device=prepared.lang_positions.device)
+    raise ValueError(f"unknown attention source {source!r}")
+
+
+def attention_scores(
     outputs,
     prepared: PreparedInputs,
     layers: Sequence[int],
+    source: str = "language",
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Aggregate attention from language rows to video columns over ``layers``.
+    """Aggregate attention from the chosen query rows to video columns.
 
     ``outputs.attentions`` is a tuple of ``(B, heads, q, k)`` tensors, one per
-    decoder layer. We average over heads and over the language query rows, then
-    over the requested layers, giving one score per video token.
+    decoder layer. We average over heads and over the selected query rows, then
+    over the requested layers, giving one score per video token. ``source``
+    selects which rows count (see :func:`_query_rows`) -- this is the knob the
+    Phase-2 supervision-source ablation turns.
     """
     if outputs.attentions is None:
         raise RuntimeError(
             "outputs.attentions is None -- call mc_evaluate(..., output_attentions=True) "
             "and load the model with attn_implementation='eager'."
         )
-    lang = prepared.lang_positions
+    rows = _query_rows(prepared, source)
     vid = prepared.video_positions
     per_layer = []
     for L in layers:
         attn = outputs.attentions[L][0]                 # (heads, q, k)
-        block = attn[:, lang][:, :, vid]                # (heads, |lang|, |vid|)
+        block = attn[:, rows][:, :, vid]                # (heads, |rows|, |vid|)
         per_layer.append(block.mean(dim=0).mean(dim=0))  # (|vid|,)
     scores = torch.stack(per_layer, dim=0).mean(dim=0).float()
     if normalize:
-        lo = scores.min()
-        scores = (scores - lo) / (scores.max() - lo + 1e-8)
+        scores = _minmax(scores)
     return scores  # (n_video,)
+
+
+def language_to_video_scores(
+    outputs, prepared: PreparedInputs, layers: Sequence[int], normalize: bool = True
+) -> torch.Tensor:
+    """The paper's teacher signal: language->video attention (source='language')."""
+    return attention_scores(outputs, prepared, layers, source="language", normalize=normalize)
+
+
+def fastv_scores(
+    outputs, prepared: PreparedInputs, layer: int = 2, normalize: bool = True
+) -> torch.Tensor:
+    """FastV's selection signal: attention received by each video token from the
+    final query position at a single (early) layer. FastV prunes the rest after
+    that layer; here we expose the score so it can be evaluated at matched rho.
+    """
+    return attention_scores(outputs, prepared, [layer], source="cls", normalize=normalize)
+
+
+def random_scores(n_video: int, device=None, generator=None) -> torch.Tensor:
+    return torch.rand(n_video, device=device, generator=generator)
+
+
+def _minmax(scores: torch.Tensor) -> torch.Tensor:
+    lo = scores.min()
+    return (scores - lo) / (scores.max() - lo + 1e-8)
 
 
 # --------------------------------------------------------------------------- #
@@ -482,6 +528,37 @@ def select_l2norm(features: torch.Tensor, k: int, largest: bool = False) -> torc
     return torch.sort(idx).values
 
 
+def select_stratified_topk(scores: torch.Tensor, k: int, n_frames: int) -> torch.Tensor:
+    """Top-k with stratified temporal allocation to prevent coverage collapse.
+
+    Divides the n_video tokens into n_frames equal temporal bins and allocates
+    floor(k/T) tokens per bin, distributing any remainder to the bins with the
+    highest peak score. Guarantees every frame contributes at least one token
+    when k >= n_frames.
+    """
+    n_video = scores.numel()
+    tokens_per_frame = n_video // n_frames  # assumes even division
+    base = k // n_frames
+    remainder = k % n_frames
+
+    # Which frames get an extra token (highest peak score wins the remainder slots)
+    frame_peaks = scores.view(n_frames, tokens_per_frame).max(dim=1).values
+    bonus = torch.zeros(n_frames, dtype=torch.long, device=scores.device)
+    if remainder > 0:
+        bonus[torch.topk(frame_peaks, k=remainder).indices] = 1
+
+    kept = []
+    for t in range(n_frames):
+        k_t = min(int(base + bonus[t].item()), tokens_per_frame)
+        if k_t == 0:
+            continue
+        offset = t * tokens_per_frame
+        local_idx = torch.topk(scores[offset: offset + tokens_per_frame], k=k_t).indices
+        kept.append(local_idx + offset)
+
+    return torch.sort(torch.cat(kept)).values
+
+
 def select_kitoke(features: torch.Tensor, k: int) -> torch.Tensor:
     """Best-effort KiToke-style "key information token" selector.
 
@@ -499,6 +576,71 @@ def select_kitoke(features: torch.Tensor, k: int) -> torch.Tensor:
     distinctiveness = 1.0 - (f_n * c_n).sum(dim=-1)   # (n_video,)
     idx = torch.topk(distinctiveness, k=min(k, f.shape[0])).indices
     return torch.sort(idx).values
+
+
+def n_frames_of(prepared: PreparedInputs) -> int:
+    """Number of temporal positions (post temporal-patching) for this clip."""
+    if prepared.video_grid_thw is None:
+        return 1
+    return int(prepared.video_grid_thw[0][0].item())
+
+
+def select_uniform_per_bin(n_video: int, k: int, n_frames: int, device=None) -> torch.Tensor:
+    """Evenly split the budget across frames, then evenly space within each frame.
+
+    The "uniform-per-bin" arm of the three-way selection ablation: spreads
+    retention across time instead of letting a global top-k collapse onto a few
+    frames.
+    """
+    if n_video % n_frames != 0:
+        return select_uniform(n_video, k, device)  # fall back if not evenly divisible
+    tokens_per_frame = n_video // n_frames
+    base = max(1, k // n_frames)
+    kept = []
+    for t in range(n_frames):
+        offset = t * tokens_per_frame
+        local = torch.linspace(0, tokens_per_frame - 1, steps=min(base, tokens_per_frame))
+        kept.append(local.round().long().unique() + offset)
+    idx = torch.sort(torch.cat(kept)).values
+    return idx.to(device) if device is not None else idx
+
+
+def select_pareto_adaptive(
+    scores: torch.Tensor, features: torch.Tensor, k: int, n_frames: int
+) -> torch.Tensor:
+    """Per-frame budgets derived from L2-norm energy, then top-by-score within frame.
+
+    The "Pareto-adaptive" arm: frames carrying more ViT-norm "energy" get a larger
+    share of the budget, instead of a flat per-frame split. Stress-tests whether
+    norm energy is a usable budgeting signal (Phase 1's norm-asymmetry caveat).
+    """
+    n_video = scores.numel()
+    if n_video % n_frames != 0:
+        return select_topk_scores(scores, k)  # fall back to global top-k
+    tpf = n_video // n_frames
+    energy = features.float().norm(dim=-1).view(n_frames, tpf).sum(dim=1)  # (n_frames,)
+    share = energy / (energy.sum() + 1e-8)
+    budgets = torch.floor(share * k).long().clamp(max=tpf)
+    # hand out the leftover to the highest-energy frames
+    leftover = int(k - int(budgets.sum().item()))
+    if leftover > 0:
+        for t in torch.argsort(energy, descending=True):
+            if leftover == 0:
+                break
+            if budgets[t] < tpf:
+                budgets[t] += 1
+                leftover -= 1
+    kept = []
+    for t in range(n_frames):
+        bt = int(budgets[t].item())
+        if bt == 0:
+            continue
+        offset = t * tpf
+        local = torch.topk(scores[offset: offset + tpf], k=bt).indices
+        kept.append(local + offset)
+    if not kept:
+        return select_topk_scores(scores, k)
+    return torch.sort(torch.cat(kept)).values
 
 
 def dropped_positions(
@@ -523,6 +665,21 @@ def get_video_features(model, prepared: PreparedInputs) -> torch.Tensor:
     base = getattr(model, "model", model)
     visual = base.visual if hasattr(base, "visual") else model.visual
     feats = visual(prepared.pixel_values, grid_thw=prepared.video_grid_thw)
+    if not isinstance(feats, torch.Tensor):
+        feats = feats.last_hidden_state
+    # Squeeze a spurious batch dimension if present: (1, N, D) → (N, D)
+    if feats.dim() == 3:
+        feats = feats.squeeze(0)
+    # When the visual encoder returns pre-merger tokens (4×n_video for merge_size=2),
+    # apply the spatial merger to get the n_video tokens that align with video_positions.
+    n_video = prepared.n_video
+    if feats.shape[0] != n_video:
+        if hasattr(visual, "merger"):
+            feats = visual.merger(feats)
+        else:
+            # Fallback: uniform average pooling over the merge ratio
+            ratio = feats.shape[0] // n_video
+            feats = feats[: ratio * n_video].view(n_video, ratio, -1).mean(dim=1)
     return feats  # (n_video, D)
 
 
@@ -534,6 +691,31 @@ def jaccard(a: Sequence[int], b: Sequence[int]) -> float:
     if not sa and not sb:
         return 1.0
     return len(sa & sb) / len(sa | sb)
+
+
+def topk_recall(pred_scores: torch.Tensor, teacher_scores: torch.Tensor, k: int) -> float:
+    """Fraction of the teacher's top-k tokens that the prediction also ranks top-k."""
+    k = min(k, pred_scores.numel())
+    pred_top = set(torch.topk(pred_scores, k).indices.tolist())
+    teach_top = set(torch.topk(teacher_scores, k).indices.tolist())
+    return len(pred_top & teach_top) / max(1, len(teach_top))
+
+
+def ndcg_at_k(pred_scores: torch.Tensor, teacher_scores: torch.Tensor, k: int) -> float:
+    """NDCG@k using the teacher score as graded relevance (gains = teacher score).
+
+    Measures how well the predicted ranking surfaces the tokens the teacher cares
+    about most, not just set overlap.
+    """
+    k = min(k, pred_scores.numel())
+    rel = teacher_scores.float()
+    rel = rel - rel.min()  # non-negative gains
+    order = torch.argsort(pred_scores, descending=True)[:k]
+    discounts = 1.0 / torch.log2(torch.arange(2, k + 2, device=rel.device).float())
+    dcg = float((rel[order] * discounts).sum().item())
+    ideal = torch.sort(rel, descending=True).values[:k]
+    idcg = float((ideal * discounts).sum().item())
+    return dcg / idcg if idcg > 0 else float("nan")
 
 
 def spearman(x: Sequence[float], y: Sequence[float]) -> float:
