@@ -125,7 +125,12 @@ def run(args):
         print(f"{rho:<8.2f}" + "".join(f"{table[s][str(rho)]:>11.4f}" for s in strategies))
     mean_gap = sum(asymmetry.values()) / len(asymmetry)
     print(f"\nMean asymmetry (norm_high - norm_low) over rho = {mean_gap:+.4f}")
-    print("Large positive gap => norm ranks 'junk' but not 'important' => a learned scorer is justified.")
+    if mean_gap > 0.05:
+        print("Positive gap: norm_high > norm_low -- norm is a partial importance signal, but likely insufficient alone. Learned scorer is justified.")
+    elif mean_gap < -0.05:
+        print("Negative gap: norm_low > norm_high -- high-norm tokens may be redundant structure. Norm is not a useful ranker.")
+    else:
+        print(f"Weak asymmetry ({mean_gap:+.4f}): norm does not reliably rank token importance. Learned scorer is justified.")
     print(f"Saved -> {args.out}")
 
 
