@@ -118,18 +118,14 @@ def train(args):
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>") # Should return 151656
     # Sanity check
     print(f"Video token ID: {video_token_id}")
-    vit_dim = model.model.visual.config.hidden_size
-    scorer = Scorer(input_dim=vit_dim, hidden_dim=args.hidden_dim).to(device)
-
-    # optimisers
-    optimiser = torch.optim.AdamW(
-        scorer.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimiser, T_max=args.max_steps, eta_min=args.learning_rate * 0.1
-    )
+    # Scorer/optimiser/scheduler are built lazily on the first batch, once we
+    # know the real feature width. The scorer scores the *merged* visual tokens
+    # (the ones the LLM attends to, dim = LLM token space e.g. 2048 for the 3B
+    # model), so it aligns 1:1 with the language->video teacher scores. This is
+    # NOT visual.config.hidden_size (1280, the pre-merger ViT width).
+    scorer = None
+    optimiser = None
+    scheduler = None
     if args.data_file:
         print(f"Loading local jsonl: {args.data_file}")
         dataset = load_local_jsonl(args.data_file, args.video_root, args.seed)
@@ -141,8 +137,7 @@ def train(args):
 
     attn_extractor = AttentionExtractor(model, Layers=args.layers)
     
-    # The training begins!
-    scorer.train()
+    # The training begins! (scorer is created + set to train() lazily on the first batch)
     step = 0
     cumulativeLoss = 0.0
     while step < args.max_steps:
@@ -171,6 +166,20 @@ def train(args):
             patch_embeds = get_patch_embeds(
                 model, pixel_values, video_grid_thw, n_video=video_positions.numel()
             ).to(device)
+
+            # Build the scorer from the real (merged) feature width on the first
+            # batch -- 2048 for the 3B model, not visual.config.hidden_size.
+            if scorer is None:
+                scorer = Scorer(input_dim=patch_embeds.shape[-1], hidden_dim=args.hidden_dim).to(device)
+                optimiser = torch.optim.AdamW(
+                    scorer.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay,
+                )
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimiser, T_max=args.max_steps, eta_min=args.learning_rate * 0.1,
+                )
+                scorer.train()
+                print(f"Scorer built: input_dim={patch_embeds.shape[-1]}, "
+                      f"{sum(p.numel() for p in scorer.parameters()) / 1e3:.0f}K params")
 
             # forward for the scoring module;
             logits = scorer(patch_embeds)
