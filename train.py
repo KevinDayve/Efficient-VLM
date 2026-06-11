@@ -3,8 +3,10 @@ from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
 import os
 import warnings
+from typing import List
 import argparse
 import torch
+import numpy as np
 from scipy.stats import spearmanr
 import torch.nn as nn
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
@@ -70,6 +72,7 @@ def train(args):
     )
     model.eval()
     processor = Qwen2_5_VLProcessor.from_pretrained(args.model_name, use_fast=True)
+    special_ids = set(processor.tokenizer.all_special_ids)
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>") # Should return 151656
     # Sanity check
     print(f"Video token ID: {video_token_id}")
@@ -95,6 +98,7 @@ def train(args):
     scorer.train()
     step = 0
     cumulativeLoss = 0.0
+    x_i_histroy: List[float] = []
     while step < args.max_steps:
         for sample in dataset:
             if step >= args.max_steps:
@@ -110,11 +114,18 @@ def train(args):
             )
             pixel_values = inputs['pixel_values_videos'].to(device)
             input_ids = inputs['input_ids'].to(device)
+            if step == 0:
+                # Debug
+                ids = input_ids[0]
+                first = (ids == video_token_id).nonzero()[0].item()
+                print(f"video starts at position: {first}")
+                print(processor.tokenizer.decode(ids[:first]))
+                # debug end
             video_grid_thw = inputs['video_grid_thw'].to(device)
             n_video = count_video_tokens(input_ids, video_token_id)
             if n_video == 0:
                 continue
-            attn_extractor.num_video_tokens = n_video
+            attn_extractor.set_sample(input_ids, video_token_id, special_ids)
             patch_embeds = get_patch_embeds(model, pixel_values, video_grid_thw).to(device)
 
             # forward for the scoring module;
@@ -128,6 +139,9 @@ def train(args):
                         video_grid_thw=video_grid_thw,
                         output_attentions=True,
                     )
+            # for the distribution shape: Empirical
+            targets_logging = attn_extractor.get_scores(normalise=False)
+            x_i_histroy.append(targets_logging)
             targets = attn_extractor.get_scores()
             if targets is None:
                 warnings.warn("No attention scores extracted. Thus, skipping this sample.")
@@ -146,6 +160,7 @@ def train(args):
             cumulativeLoss += loss.item()
             step += 1
             if step % args.log_interval == 0:
+                x_i_median = float(np.median(x_i_histroy))
                 rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
                 print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}")
                 cumulativeLoss = 0.0
