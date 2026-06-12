@@ -275,7 +275,7 @@ def train(args):
     cumulativeLoss = 0.0
     last_loss = 0.0
     last_logits = last_targets = None   # most recent sample, for the rho diagnostic
-    best_val_rho = float('-inf')   # for best-checkpoint tracking
+    best_val_metric = float('-inf')   # for best-checkpoint tracking (see --best_metric)
     # Raw (un-normalised) teacher scores accumulated over each log interval, used
     # to monitor the EVT Pareto tail index of visual-token importance.
     raw_score_history = []
@@ -409,11 +409,12 @@ def train(args):
                       f"rho {val_metrics['val/spearman_rho']:.4f}, {rec_str} over {n_val} samples")
                 if run is not None:
                     run.log(val_metrics, step=step)
-                # Track the best scorer by validation rho. (Switch to a recall@ key
-                # here if you'd rather select on the selection-aligned metric.)
-                val_rho = val_metrics["val/spearman_rho"]
-                if val_rho == val_rho and val_rho > best_val_rho:
-                    best_val_rho = val_rho
+                # Save the best scorer by the chosen selection-aligned metric
+                # (default val/recall@25 -- predicts the aggressive-retention
+                # downstream accuracy better than full-ranking rho).
+                mval = val_metrics.get(f"val/{args.best_metric}")
+                if mval is not None and mval == mval and mval > best_val_metric:
+                    best_val_metric = mval
                     save_checkpoint(scorer, optimiser, scheduler, step,
                                     args.checkpoint_dir, val_metrics["val/loss"], tag="best")
 
@@ -438,6 +439,7 @@ def parse_args():
     arguments.add_argument("--val_interval", type=int, default=500, help='Run validation every this many steps.')
     arguments.add_argument("--val_samples", type=int, default=100, help='Number of held-out samples to evaluate each validation pass.')
     arguments.add_argument("--val_ratios", type=float, nargs="+", default=[0.25, 0.5, 0.75], help='Retention ratios at which to report top-k recall / NDCG@k during validation.')
+    arguments.add_argument("--best_metric", type=str, default="recall@25", help="Validation metric for the best checkpoint, without the 'val/' prefix (e.g. recall@25, sel_recall@25, spearman_rho). Must correspond to a logged metric.")
     arguments.add_argument("--grad_accum", type=int, default=1, help='Accumulate gradients over this many samples per optimiser step (effective batch size). Reduces gradient noise vs the default bs=1.')
     arguments.add_argument("--hidden_dim", type=int, default=256, help='The hidden dimension of the scorer module.')
     arguments.add_argument("--layers", type=int, nargs="+", default=[12, 13, 14, 15, 16], help="The layers from which to extract the attention scores.")
