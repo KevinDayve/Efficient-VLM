@@ -119,6 +119,16 @@ def load_local_jsonl(data_file: str, video_root: str, seed: int, max_pixels: int
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Optional Weights & Biases logging (no-op unless --wandb is passed).
+    run = None
+    if args.wandb:
+        import wandb
+        run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            entity=args.wandb_entity,
+            config=vars(args),
+        )
     model =  Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name,
         torch_dtype=torch.float16 if args.fp16 else torch.float32,
@@ -254,13 +264,21 @@ def train(args):
             step += 1
             if step % args.log_interval == 0:
                 rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
-                msg = f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}"
+                avg_loss = cumulativeLoss / args.log_interval
+                msg = f"Step {step} / {args.max_steps}, Loss: {avg_loss:.4f}, Correlation (between target and predicted): {rho}"
+                metrics = {"train/loss": avg_loss, "train/spearman_rho": rho,
+                           "train/lr": scheduler.get_last_lr()[0]}
                 if raw_score_history:
                     all_scores = torch.cat(raw_score_history)
                     tail_index = einmahlHaan(all_scores)
-                    msg += f", EVT tail index (eps): {tail_index:.4f}, median raw score: {all_scores.median().item():.4e}"
+                    median_score = all_scores.median().item()
+                    msg += f", EVT tail index (eps): {tail_index:.4f}, median raw score: {median_score:.4e}"
+                    metrics["train/evt_tail_index"] = tail_index
+                    metrics["train/median_raw_score"] = median_score
                     raw_score_history.clear()
                 print(msg)
+                if run is not None:
+                    run.log(metrics, step=step)
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
@@ -269,6 +287,9 @@ def train(args):
     # max_steps isn't a multiple of save_every.
     if scorer is not None:
         save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, last_loss)
+
+    if run is not None:
+        run.finish()
 
 
 def parse_args():
@@ -289,7 +310,11 @@ def parse_args():
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
     arguments.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume scorer/optimiser/scheduler and step from.")
-    arguments.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (in pixels, e.g. 50176 = 224*224) to bound sequence length and attention memory. Lower this to fix OOM.")
+    arguments.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (in pixels, e.g. 100352 = 128*28*28) to bound sequence length and attention memory. Lower this to fix OOM.")
+    arguments.add_argument("--wandb", action="store_true", help="Log metrics to Weights & Biases.")
+    arguments.add_argument("--wandb_project", type=str, default="efficientvlm", help="W&B project name.")
+    arguments.add_argument("--wandb_run_name", type=str, default=None, help="W&B run name (defaults to an auto-generated name).")
+    arguments.add_argument("--wandb_entity", type=str, default=None, help="W&B entity (team/user); defaults to your default entity.")
     return arguments.parse_args()
 
 if __name__ == "__main__":
