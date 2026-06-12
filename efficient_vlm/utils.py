@@ -88,17 +88,17 @@ def pareto_budget(
     k_t = k_t.clamp(max=N)
 
     # Redistribute any budget lost to the per-bin N cap to bins with room.
-    for _ in range(T):
+    # Loop until the budget is fully placed or every bin is saturated -- each
+    # pass adds at least one token, so this terminates (bounded by N).
+    while True:
         short = K - int(k_t.sum().item())
         if short <= 0:
             break
-        room = k_t < N
-        if not bool(room.any()):
+        cand = torch.where(k_t < N)[0]
+        if cand.numel() == 0:
             break
-        cand = torch.where(room)[0]
         order = cand[torch.argsort(w[cand], descending=True)]
-        for idx in order[:short]:
-            k_t[idx] += 1
+        k_t[order[:short]] += 1   # +1 to each (distinct) bin, up to `short`
     return k_t.to(device)
 
 
