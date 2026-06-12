@@ -1,7 +1,7 @@
 from efficient_vlm.attention_extractor import AttentionExtractor
 from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
-from efficient_vlm.utils import einmahlHaan, topk_recall, ndcg_at_k
+from efficient_vlm.utils import einmahlHaan, topk_recall, ndcg_at_k, select_pareto_stratified
 import os
 import json
 import random
@@ -138,6 +138,10 @@ def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
     losses, rhos, n = [], [], 0
     recalls = {r: [] for r in val_ratios}
     ndcgs = {r: [] for r in val_ratios}
+    # Selection-faithful recall: overlap between the tokens the deployed
+    # stratified-Pareto selector would keep (from predicted scores) and the
+    # teacher's top-k. Predicts deployed behaviour better than global recall@k.
+    sel_recalls = {r: [] for r in val_ratios}
     for sample in val_dataset:
         if n >= max_samples:
             break
@@ -175,12 +179,17 @@ def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
         if rho == rho:  # skip NaN (constant inputs)
             rhos.append(rho)
         n_video = pred.numel()
+        n_frames = int(video_grid_thw[0][0].item())
         for r in val_ratios:
             k = max(1, int(round(r * n_video)))
             recalls[r].append(topk_recall(pred, teach, k))
             nd = ndcg_at_k(pred, teach, k)
             if nd == nd:
                 ndcgs[r].append(nd)
+            # What the deployed selector actually keeps, vs the teacher's top-k.
+            kept = set(select_pareto_stratified(pred, k, n_frames).tolist())
+            teach_top = set(torch.topk(teach, min(k, n_video)).indices.tolist())
+            sel_recalls[r].append(len(kept & teach_top) / max(1, len(teach_top)))
         n += 1
     if was_training:
         scorer.train()
@@ -193,6 +202,7 @@ def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
         pct = int(round(r * 100))
         metrics[f"val/recall@{pct}"] = _mean(recalls[r])
         metrics[f"val/ndcg@{pct}"] = _mean(ndcgs[r])
+        metrics[f"val/sel_recall@{pct}"] = _mean(sel_recalls[r])
     return metrics, n
 
 

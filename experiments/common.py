@@ -37,6 +37,8 @@ from typing import List, Optional, Sequence
 import numpy as np
 import torch
 
+from efficient_vlm.utils import pareto_budget, select_pareto_stratified
+
 try:  # qwen-vl-utils is the official helper for packing video frames
     from qwen_vl_utils import process_vision_info
 except Exception:  # pragma: no cover - surfaced clearly at runtime

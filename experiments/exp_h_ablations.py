@@ -43,7 +43,7 @@ def run(args):
     layer_sets = parse_layer_sets(args.layer_sets)
 
     sup_sources = ["language", "cls", "all", "random"]
-    sel_variants = ["global_topk", "uniform_per_bin", "pareto"]
+    sel_variants = ["global_topk", "uniform_per_bin", "pareto", "norm_energy"]
 
     # accuracy[ablation][variant][rho] = count
     def fresh(variants):
@@ -106,7 +106,11 @@ def run(args):
                 variants = {
                     "global_topk": common.select_topk_scores(base_scores, k),
                     "uniform_per_bin": common.select_uniform_per_bin(n_video, k, n_frames, features.device),
-                    "pareto": common.select_pareto_adaptive(base_scores, features, k, n_frames),
+                    # The paper's 2.4 method: stratified per-bin top-k with
+                    # tail-index-adaptive budgets.
+                    "pareto": common.select_pareto_stratified(base_scores, k, n_frames),
+                    # Baseline contrast: per-frame budgets from L2-norm energy.
+                    "norm_energy": common.select_pareto_adaptive(base_scores, features, k, n_frames),
                 }
                 for v, kept in variants.items():
                     acc["selection"][v][rho] += int(

@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from typing import Tuple
 
+from efficient_vlm.utils import pareto_budget
+
 class Scorer(nn.Module):
     """
     A small MLP that outputs a score for a feature vector R^{T x N x D}
@@ -54,27 +56,24 @@ class Scorer(nn.Module):
         logits = self.head(xhat).squeeze(-1) # B, L
         return logits
     
-    def allocate_budget(self, logits: torch.Tensor, T: int, K: int, k_min: int = 4) -> torch.Tensor:
-        """
+    def allocate_budget(self, logits: torch.Tensor, T: int, K: int, k_min: int = 4,
+                        temp: float = 1.0, beta_max: float = 3.0) -> torch.Tensor:
+        """Per-bin budgets (B, T) summing to K, set by the Pareto tail index.
+
+        Delegates to :func:`efficient_vlm.utils.pareto_budget` (paper section 2.4):
+        the per-bin allocation concentrates with the estimated tail index gamma.
+
         Args:
-            logits: (B, T*N)
+            logits: (B, T*N) predicted importance.
         Returns:
-            integer budgets (B, T) that sum exactly K, floored at k_min.
+            integer budgets (B, T) that sum to K, floored at k_min, capped at N.
         """
-        B, L = logits.shape
-        N = L // T
-        binMass = torch.sigmoid(logits).view(B, T, N).view(dim=-1)
-        spendable = K - k_min * T
-        assert spendable >= 0, "K too small. Please alter the budget."
-        frac = spendable * binMass / binMass.sum(dim=-1, keepdim=True)
-        k_t = k_min + frac.floor().long()
-        for b in range(B):
-            deficit = K - int(k_t[b].sum())
-            if deficit > 0:
-                remaining = frac[b] - frac[b].floor()
-                top = torch.topk(remaining, deficit).indices
-                k_t[b, top] += 1
-        return k_t.clamp(max=N)
+        B, _ = logits.shape
+        budgets = [
+            pareto_budget(logits[b], n_frames=T, K=K, k_min=k_min, temp=temp, beta_max=beta_max)
+            for b in range(B)
+        ]
+        return torch.stack(budgets, dim=0)
     
     def select_stratified(self, x: torch.Tensor, T: int, K: int, k_min: int = 4) -> Tuple[torch.Tensor, torch.Tensor]:
         """

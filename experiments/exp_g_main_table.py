@@ -72,8 +72,8 @@ STRATEGIES: Dict[str, Callable] = {
     "kitoke":           lambda ctx, k: common.select_kitoke(ctx.features, k),
     "fastv":            lambda ctx, k: common.select_topk_scores(ctx.fastv_scores, k),
     "attention_oracle": lambda ctx, k: common.select_topk_scores(ctx.teacher_scores, k),
-    "ours":             lambda ctx, k: common.select_topk_scores(
-                            ctx.scorer(ctx.features.unsqueeze(0)).squeeze(0), k),
+    "ours":             lambda ctx, k: common.select_pareto_stratified(
+                            ctx.scorer(ctx.features.unsqueeze(0)).squeeze(0), k, ctx.n_frames),
     # --- stubs: official code required ---
     "l1_delta":     _stub("l1_delta", "L1-delta token redundancy"),
     "dycoke":       _stub("dycoke", "DyCoke"),
