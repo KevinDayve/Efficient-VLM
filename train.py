@@ -38,9 +38,10 @@ def count_video_tokens(input_ids: torch.Tensor, video_token_id: int) -> int:
     return (input_ids == video_token_id).sum().item()
 
 
-def save_checkpoint(scorer: nn.Module, optimiser: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, step: int, checkpoint_dir: str, loss: float):
+def save_checkpoint(scorer: nn.Module, optimiser: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, step: int, checkpoint_dir: str, loss: float, tag: str = None):
     os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f"scorer_step_{step}.pt")
+    name = f"scorer_{tag}.pt" if tag else f"scorer_step_{step}.pt"
+    checkpoint_path = os.path.join(checkpoint_dir, name)
     torch.save({
         "step": step,
         "model_state": scorer.state_dict(),
@@ -117,6 +118,61 @@ def load_local_jsonl(data_file: str, video_root: str, seed: int, max_pixels: int
     return [make_conversation_local(r, video_root, max_pixels=max_pixels) for r in records]
 
 
+@torch.no_grad()
+def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
+                   device, special_ids, video_token_id, max_samples):
+    """Evaluate the scorer on a held-out set: mean ListMLE loss and Spearman rho
+    between predicted and teacher (language->video attention) rankings.
+
+    The scorer is switched to eval() for the pass and back to train() after.
+    Uses the same truncated forward as training (no gradients flow anywhere).
+    """
+    was_training = scorer.training
+    scorer.eval()
+    losses, rhos, n = [], [], 0
+    for sample in val_dataset:
+        if n >= max_samples:
+            break
+        prompt = sample['prompt']
+        text = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=False)
+        image_inputs, video_inputs = process_vision_info(prompt)
+        inputs = processor(text=[text], images=image_inputs, videos=video_inputs, return_tensors='pt')
+        pixel_values = inputs['pixel_values_videos'].to(device)
+        input_ids = inputs['input_ids'].to(device)
+        video_grid_thw = inputs['video_grid_thw'].to(device)
+        video_positions = (input_ids[0] == video_token_id).nonzero(as_tuple=False).flatten()
+        if video_positions.numel() == 0:
+            continue
+        attn_extractor.set_sample(input_ids, video_token_id, special_ids)
+        patch_embeds = get_patch_embeds(
+            model, pixel_values, video_grid_thw, n_video=video_positions.numel()
+        ).to(device)
+        logits = scorer(patch_embeds.float())
+        attentions = attn_extractor.truncated_forward(
+            input_ids=input_ids,
+            attention_mask=inputs['attention_mask'].to(device),
+            pixel_values_videos=pixel_values,
+            video_grid_thw=video_grid_thw,
+            output_attentions=True,
+            use_cache=False,
+        )
+        targets = attn_extractor.scores_from_attentions(attentions)
+        del attentions
+        if targets is None:
+            continue
+        targets = targets.to(device)
+        losses.append(listmle_loss(logits, targets, top_m=args.top_m).item())
+        rho = spearmanr(logits[0].float().cpu().numpy(), targets[0].float().cpu().numpy()).statistic
+        if rho == rho:  # skip NaN (constant inputs)
+            rhos.append(rho)
+        n += 1
+    if was_training:
+        scorer.train()
+    mean_loss = sum(losses) / len(losses) if losses else float('nan')
+    mean_rho = sum(rhos) / len(rhos) if rhos else float('nan')
+    return mean_loss, mean_rho, n
+
+
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Optional Weights & Biases logging (no-op unless --wandb is passed).
@@ -160,6 +216,14 @@ def train(args):
         dataset = dataset.map(lambda x: make_conversation(x, args.video_root, max_pixels=args.max_pixels))
         dataset = dataset.shuffle(seed=args.seed)
 
+    # Held-out validation set (optional). Shuffled with a fixed seed so the first
+    # --val_samples items form a stable subset across evaluations.
+    val_dataset = None
+    if args.val_file:
+        val_root = args.val_video_root or args.video_root
+        val_dataset = load_local_jsonl(args.val_file, val_root, args.seed, max_pixels=args.max_pixels)
+        print(f"Loaded {len(val_dataset)} val samples from {args.val_file}")
+
     attn_extractor = AttentionExtractor(model, Layers=args.layers)
 
     # Optionally resume: the scorer is built lazily (we need the feature width from
@@ -173,6 +237,7 @@ def train(args):
     step = 0
     cumulativeLoss = 0.0
     last_loss = 0.0
+    best_val_rho = float('-inf')   # for best-checkpoint tracking
     # Raw (un-normalised) teacher scores accumulated over each log interval, used
     # to monitor the EVT Pareto tail index of visual-token importance.
     raw_score_history = []
@@ -282,10 +347,25 @@ def train(args):
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
+            if val_dataset is not None and step % args.val_interval == 0:
+                val_loss, val_rho, n_val = run_validation(
+                    model, processor, scorer, attn_extractor, val_dataset, args,
+                    device, special_ids, video_token_id, args.val_samples,
+                )
+                print(f"  [val] step {step}: loss {val_loss:.4f}, spearman_rho {val_rho:.4f} "
+                      f"over {n_val} samples")
+                if run is not None:
+                    run.log({"val/loss": val_loss, "val/spearman_rho": val_rho}, step=step)
+                # Track the best scorer by validation rho.
+                if val_rho == val_rho and val_rho > best_val_rho:
+                    best_val_rho = val_rho
+                    save_checkpoint(scorer, optimiser, scheduler, step,
+                                    args.checkpoint_dir, val_loss, tag="best")
 
     # Final checkpoint so the fully-trained scorer is always saved, even when
-    # max_steps isn't a multiple of save_every.
-    if scorer is not None:
+    # max_steps isn't a multiple of save_every. Skip if the last step already
+    # triggered a periodic save (avoids a redundant double-write).
+    if scorer is not None and step % args.save_every != 0:
         save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, last_loss)
 
     if run is not None:
@@ -298,6 +378,10 @@ def parse_args():
     arguments.add_argument("--dataset_name", type=str, default='lmms-lab/NExTVideo', help='The name of the training dataset. Should be compatible with HF datasets library. Ignored when --data_file is set.')
     arguments.add_argument("--data_file", type=str, default=None, help='Path to a local jsonl (rhymes-ai/NeXTVideo format). When set, overrides --dataset_name.')
     arguments.add_argument("--video_root", type=str, required=True, help='The root directory where video files are stored. Use the snapshot downloaded as the path.')
+    arguments.add_argument("--val_file", type=str, default=None, help='Path to a held-out validation jsonl. When set, periodically evaluates loss + Spearman rho and saves a best-by-rho checkpoint.')
+    arguments.add_argument("--val_video_root", type=str, default=None, help='Video root for the validation set. Defaults to --video_root.')
+    arguments.add_argument("--val_interval", type=int, default=500, help='Run validation every this many steps.')
+    arguments.add_argument("--val_samples", type=int, default=100, help='Number of held-out samples to evaluate each validation pass.')
     arguments.add_argument("--hidden_dim", type=int, default=256, help='The hidden dimension of the scorer module.')
     arguments.add_argument("--layers", type=int, nargs="+", default=[12, 13, 14, 15, 16], help="The layers from which to extract the attention scores.")
     arguments.add_argument("--learning_rate", type=float, default=1e-4, help='The learning rate for the optimiser module.')
