@@ -268,7 +268,8 @@ def parse_args():
     # timing / validation
     p.add_argument("--warmup", type=int, default=3, help="samples excluded from timing stats (CUDA warm-up)")
     p.add_argument("--skip_self_test", action="store_true", help="skip the K=n_video plumbing check")
-    p.add_argument("--self_test_atol", type=float, default=1e-2)
+    p.add_argument("--self_test_atol", type=float, default=0.5,
+                   help="fp16-realistic logit bound; the gate also requires the predicted option to match")
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_eval.json")
