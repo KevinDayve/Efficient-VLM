@@ -51,17 +51,20 @@ def save_checkpoint(scorer: nn.Module, optimiser: torch.optim.Optimizer, schedul
     print(f"Checkpoint saved at step {step} to path: {checkpoint_path} with loss: {loss}")
 
 
-def make_conversation(sample, video_root, max_frames: int = 8):
+def make_conversation(sample, video_root, max_frames: int = 8, max_pixels: int = None):
+    video_item = {
+        "type": "video",
+        "video": f"{video_root}/{sample['video']}",
+        "nframes": max_frames,
+    }
+    if max_pixels is not None:
+        video_item["max_pixels"] = max_pixels
     return {
         "prompt": [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "video",
-                        "video": f"{video_root}/{sample['video']}",
-                        "nframes": max_frames
-                    },
+                    video_item,
                     {
                         "type": "text",
                         "text": sample['question']
@@ -107,11 +110,11 @@ def make_conversation_local(record: dict, video_root: str, default_frames: int =
     return {"prompt": prompt}
 
 
-def load_local_jsonl(data_file: str, video_root: str, seed: int):
+def load_local_jsonl(data_file: str, video_root: str, seed: int, max_pixels: int = None):
     with open(data_file) as fh:
         records = [json.loads(line) for line in fh if line.strip()]
     random.Random(seed).shuffle(records)
-    return [make_conversation_local(r, video_root) for r in records]
+    return [make_conversation_local(r, video_root, max_pixels=max_pixels) for r in records]
 
 
 def train(args):
@@ -140,11 +143,11 @@ def train(args):
     scheduler = None
     if args.data_file:
         print(f"Loading local jsonl: {args.data_file}")
-        dataset = load_local_jsonl(args.data_file, args.video_root, args.seed)
+        dataset = load_local_jsonl(args.data_file, args.video_root, args.seed, max_pixels=args.max_pixels)
         print(f"Loaded {len(dataset)} local samples.")
     else:
         dataset = load_dataset(args.dataset_name, split='train')
-        dataset = dataset.map(lambda x: make_conversation(x, args.video_root))
+        dataset = dataset.map(lambda x: make_conversation(x, args.video_root, max_pixels=args.max_pixels))
         dataset = dataset.shuffle(seed=args.seed)
 
     attn_extractor = AttentionExtractor(model, Layers=args.layers)
@@ -159,6 +162,7 @@ def train(args):
     # The training begins! (scorer is created + set to train() lazily on the first batch)
     step = 0
     cumulativeLoss = 0.0
+    last_loss = 0.0
     # Raw (un-normalised) teacher scores accumulated over each log interval, used
     # to monitor the EVT Pareto tail index of visual-token importance.
     raw_score_history = []
@@ -245,7 +249,8 @@ def train(args):
             optimiser.step()
             scheduler.step()
 
-            cumulativeLoss += loss.item()
+            last_loss = loss.item()
+            cumulativeLoss += last_loss
             step += 1
             if step % args.log_interval == 0:
                 rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
@@ -263,7 +268,7 @@ def train(args):
     # Final checkpoint so the fully-trained scorer is always saved, even when
     # max_steps isn't a multiple of save_every.
     if scorer is not None:
-        save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, cumulativeLoss)
+        save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, last_loss)
 
 
 def parse_args():
@@ -284,6 +289,7 @@ def parse_args():
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
     arguments.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume scorer/optimiser/scheduler and step from.")
+    arguments.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (in pixels, e.g. 50176 = 224*224) to bound sequence length and attention memory. Lower this to fix OOM.")
     return arguments.parse_args()
 
 if __name__ == "__main__":
