@@ -69,9 +69,15 @@ def run(args):
     if needs_scorer and not args.scorer_ckpt:
         raise ValueError("strategy 'ours' requires --scorer_ckpt (train it with exp_f / train.py).")
 
-    samples = common.load_nextqa_dev(
-        args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
-    )
+    if args.data_file:
+        samples = common.load_local_mc_jsonl(
+            args.data_file, args.video_root, args.max_pairs, args.seed
+        )
+        print(f"Eval (local): {len(samples)} pairs from {args.data_file}")
+    else:
+        samples = common.load_nextqa_dev(
+            args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
+        )
     print(f"Eval: {len(samples)} pairs | strategies={strategies} | rhos={args.rhos} "
           f"| k_min={args.k_min}")
 
@@ -88,7 +94,8 @@ def run(args):
 
     for sample in tqdm(samples):
         try:
-            prepared = common.prepare_inputs(model, processor, sample, args.max_frames)
+            prepared = common.prepare_inputs(model, processor, sample, args.max_frames,
+                                             max_pixels=args.max_pixels)
         except Exception as e:
             tqdm.write(f"skip {sample.qid}: {e}")
             continue
@@ -239,9 +246,13 @@ def parse_args():
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--dataset_name", default="lmms-lab/NExTQA",
                    help="NExT-QA MC mirror; VideoMME/MVBench need a field adapter in common.py")
+    p.add_argument("--data_file", default=None,
+                   help="Local MC jsonl (train/val format). Overrides --dataset_name; resolves nested videos under --video_root.")
     p.add_argument("--split", default="test")
     p.add_argument("--video_root", required=True)
     p.add_argument("--video_ext", default="mp4")
+    p.add_argument("--max_pixels", type=int, default=None,
+                   help="Cap per-frame resolution (e.g. 100352) to bound attention memory. Use this on a T4.")
     p.add_argument("--max_pairs", type=int, default=400)
     p.add_argument("--max_frames", type=int, default=8)
     p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.50, 0.75],

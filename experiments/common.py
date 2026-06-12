@@ -210,6 +210,60 @@ def load_nextqa_dev(
     return samples
 
 
+def load_local_mc_jsonl(
+    data_file: str,
+    video_root: str,
+    max_pairs: Optional[int] = None,
+    seed: int = 42,
+) -> List["MCSample"]:
+    """Load NExT-QA MC samples from a local jsonl (the train/val format used by
+    train.py), so evaluation runs on the same held-out split and nested video
+    layout as training -- no Hub download, no flat-path assumption.
+
+    Expected per record: ``all_choices`` (letters), ``gt`` (answer letter),
+    ``index2ans`` (letter -> option text), ``messages`` (the question text, with
+    options inlined), and ``video.path`` (relative, e.g. ./NExTVideo/<grp>/<id>.mp4).
+    """
+    import json
+    import os
+
+    with open(data_file) as fh:
+        records = [json.loads(line) for line in fh if line.strip()]
+    random.Random(seed).shuffle(records)
+    if max_pairs is not None:
+        records = records[:max_pairs]
+
+    samples: List[MCSample] = []
+    for r in records:
+        choices = r["all_choices"]
+        options = [str(r["index2ans"][c]) for c in choices]
+        try:
+            answer_idx = choices.index(r["gt"])
+        except (ValueError, KeyError):
+            continue
+        # The question stem is the first line of the user text (options are
+        # inlined after it); build_mc_messages re-renders the options block.
+        text = next(
+            it["text"] for m in r["messages"] for it in m["content"]
+            if it.get("type") == "text" and it.get("text")
+        )
+        question = text.split("\n", 1)[0].strip()
+        rel = r["video"]["path"]
+        path = os.path.normpath(os.path.join(video_root, rel))
+        samples.append(
+            MCSample(
+                video_id=rel,
+                video_path=path,
+                question=question,
+                options=options,
+                answer_idx=answer_idx,
+                qid=str(r.get("qid", rel)),
+                qtype=str(r.get("type", "")),
+            )
+        )
+    return samples
+
+
 # --------------------------------------------------------------------------- #
 # Prompt building + MC evaluation
 # --------------------------------------------------------------------------- #
@@ -233,27 +287,30 @@ def _options_block(options: List[str]) -> str:
     return "\n".join(f"{LETTERS[i]}. {opt}" for i, opt in enumerate(options))
 
 
-def build_mc_messages(sample: MCSample, max_frames: int) -> List[dict]:
+def build_mc_messages(sample: MCSample, max_frames: int, max_pixels: int = None) -> List[dict]:
     prompt = (
         f"{sample.question}\n{_options_block(sample.options)}\n"
         "Answer with the letter of the correct option."
     )
+    video_item = {"type": "video", "video": sample.video_path, "nframes": max_frames}
+    if max_pixels is not None:
+        video_item["max_pixels"] = max_pixels
     return [
         {
             "role": "user",
             "content": [
-                {"type": "video", "video": sample.video_path, "nframes": max_frames},
+                video_item,
                 {"type": "text", "text": prompt},
             ],
         }
     ]
 
 
-def prepare_inputs(model, processor, sample: MCSample, max_frames: int) -> PreparedInputs:
+def prepare_inputs(model, processor, sample: MCSample, max_frames: int, max_pixels: int = None) -> PreparedInputs:
     if process_vision_info is None:
         raise ImportError("qwen-vl-utils is required (pip install qwen-vl-utils).")
 
-    messages = build_mc_messages(sample, max_frames)
+    messages = build_mc_messages(sample, max_frames, max_pixels=max_pixels)
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
     enc = processor(text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt")
