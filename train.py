@@ -1,6 +1,7 @@
 from efficient_vlm.attention_extractor import AttentionExtractor
 from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
+from efficient_vlm.utils import einmahlHaan
 import os
 import json
 import random
@@ -74,7 +75,7 @@ def make_conversation(sample, video_root, max_frames: int = 8):
         ]
     }
 
-def make_conversation_local(record: dict, video_root: str, default_frames: int = 8):
+def make_conversation_local(record: dict, video_root: str, default_frames: int = 8, max_pixels: int = None):
     """Adapt a rhymes-ai/NeXTVideo jsonl record to the prompt format the loop expects.
 
     Each record already carries a chat-style ``messages`` list (question + options
@@ -82,6 +83,11 @@ def make_conversation_local(record: dict, video_root: str, default_frames: int =
     ``video`` dict ``{"path": "./NExTVideo/<grp>/<id>.mp4", "num_frames": N}``.
     We resolve the relative video path against ``video_root`` and inline it into
     the video content item so ``process_vision_info`` can load the frames.
+
+    ``max_pixels`` caps each frame's resolution (Qwen uses dynamic resolution, so
+    this bounds the sequence length and the O(S^2) attention memory). It is read
+    by ``qwen_vl_utils.process_vision_info``, which resizes the frames before the
+    processor sees them.
     """
     rel_path = record["video"]["path"]
     nframes = int(record["video"].get("num_frames", default_frames))
@@ -91,7 +97,10 @@ def make_conversation_local(record: dict, video_root: str, default_frames: int =
         content = []
         for item in msg["content"]:
             if item.get("type") == "video":
-                content.append({"type": "video", "video": abs_path, "nframes": nframes})
+                vid_item = {"type": "video", "video": abs_path, "nframes": nframes}
+                if max_pixels is not None:
+                    vid_item["max_pixels"] = max_pixels
+                content.append(vid_item)
             else:
                 content.append({"type": "text", "text": item["text"]})
         prompt.append({"role": msg["role"], "content": content})
@@ -116,6 +125,9 @@ def train(args):
     model.eval()
     processor = Qwen2_5_VLProcessor.from_pretrained(args.model_name, use_fast=True)
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>") # Should return 151656
+    # Special-token ids are excluded from the language query rows when reading
+    # teacher attention, so tokens like <|im_end|>/padding don't add noise.
+    special_ids = set(processor.tokenizer.all_special_ids)
     # Sanity check
     print(f"Video token ID: {video_token_id}")
     # Scorer/optimiser/scheduler are built lazily on the first batch, once we
@@ -136,10 +148,20 @@ def train(args):
         dataset = dataset.shuffle(seed=args.seed)
 
     attn_extractor = AttentionExtractor(model, Layers=args.layers)
-    
+
+    # Optionally resume: the scorer is built lazily (we need the feature width from
+    # the first batch), so the actual state load happens in the lazy-build block.
+    resume_state = None
+    if args.resume:
+        resume_state = torch.load(args.resume, map_location=device)
+        print(f"Resuming from {args.resume} (step {resume_state['step']})")
+
     # The training begins! (scorer is created + set to train() lazily on the first batch)
     step = 0
     cumulativeLoss = 0.0
+    # Raw (un-normalised) teacher scores accumulated over each log interval, used
+    # to monitor the EVT Pareto tail index of visual-token importance.
+    raw_score_history = []
     while step < args.max_steps:
         for sample in dataset:
             if step >= args.max_steps:
@@ -162,7 +184,9 @@ def train(args):
             video_positions = (input_ids[0] == video_token_id).nonzero(as_tuple=False).flatten()
             if video_positions.numel() == 0:
                 continue
-            attn_extractor.video_positions = video_positions
+            # Sets attn_extractor.video_positions and the special-token-excluding
+            # query mask used by scores_from_attentions.
+            attn_extractor.set_sample(input_ids, video_token_id, special_ids)
             patch_embeds = get_patch_embeds(
                 model, pixel_values, video_grid_thw, n_video=video_positions.numel()
             ).to(device)
@@ -180,23 +204,38 @@ def train(args):
                 scorer.train()
                 print(f"Scorer built: input_dim={patch_embeds.shape[-1]}, "
                       f"{sum(p.numel() for p in scorer.parameters()) / 1e3:.0f}K params")
+                if resume_state is not None:
+                    scorer.load_state_dict(resume_state["model_state"])
+                    optimiser.load_state_dict(resume_state["optimiser_state"])
+                    scheduler.load_state_dict(resume_state["scheduler_state"])
+                    step = int(resume_state["step"])
+                    print(f"Restored scorer/optimiser/scheduler; continuing from step {step}")
+                    resume_state = None
 
             # forward for the scoring module; keep the scorer in fp32 (stable for
             # LayerNorm/AdamW) and cast the fp16 features up to match its weights.
             logits = scorer(patch_embeds.float())
+            # Truncated forward: capture attention at the critical layers and abort
+            # right after max(layers), so the VLM never computes the layers above.
             with torch.no_grad():
-                outputs = model(
+                attentions = attn_extractor.truncated_forward(
                     input_ids=input_ids,
                     attention_mask=inputs['attention_mask'].to(device),
                     pixel_values_videos=pixel_values,
                     video_grid_thw=video_grid_thw,
                     output_attentions=True,
+                    use_cache=False,
                 )
-            targets = attn_extractor.scores_from_attentions(outputs.attentions)
-            del outputs
+            targets = attn_extractor.scores_from_attentions(attentions)
+            # Raw scores for the EVT tail-index diagnostic (min-max normalisation
+            # would destroy the heavy tail the estimator reads).
+            raw_targets = attn_extractor.scores_from_attentions(attentions, normalise=False)
+            del attentions
             if targets is None:
                 warnings.warn("No attention scores extracted. Thus, skipping this sample.")
                 continue
+            if raw_targets is not None:
+                raw_score_history.append(raw_targets.flatten().cpu())
             targets = targets.to(device)
             loss = listmle_loss(logits, targets, top_m=args.top_m)
             optimiser.zero_grad()
@@ -210,11 +249,22 @@ def train(args):
             step += 1
             if step % args.log_interval == 0:
                 rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
-                print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}")
+                msg = f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}"
+                if raw_score_history:
+                    all_scores = torch.cat(raw_score_history)
+                    tail_index = einmahlHaan(all_scores)
+                    msg += f", EVT tail index (eps): {tail_index:.4f}, median raw score: {all_scores.median().item():.4e}"
+                    raw_score_history.clear()
+                print(msg)
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
-            
+
+    # Final checkpoint so the fully-trained scorer is always saved, even when
+    # max_steps isn't a multiple of save_every.
+    if scorer is not None:
+        save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, cumulativeLoss)
+
 
 def parse_args():
     arguments = argparse.ArgumentParser(description="Train the projector for efficient VLM token pruning.")
@@ -233,6 +283,7 @@ def parse_args():
     arguments.add_argument("--fp16", action="store_true", help="Load the frozen VLM in float16 (recommended for fitting/speed).")
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
+    arguments.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume scorer/optimiser/scheduler and step from.")
     return arguments.parse_args()
 
 if __name__ == "__main__":
