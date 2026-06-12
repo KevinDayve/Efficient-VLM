@@ -1,7 +1,7 @@
 from efficient_vlm.attention_extractor import AttentionExtractor
 from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
-from efficient_vlm.utils import einmahlHaan
+from efficient_vlm.utils import einmahlHaan, topk_recall, ndcg_at_k
 import os
 import json
 import random
@@ -120,16 +120,24 @@ def load_local_jsonl(data_file: str, video_root: str, seed: int, max_pixels: int
 
 @torch.no_grad()
 def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
-                   device, special_ids, video_token_id, max_samples):
-    """Evaluate the scorer on a held-out set: mean ListMLE loss and Spearman rho
-    between predicted and teacher (language->video attention) rankings.
+                   device, special_ids, video_token_id, max_samples, val_ratios):
+    """Evaluate the scorer on a held-out set.
+
+    Reports mean ListMLE loss, full-ranking Spearman rho, and the
+    selection-aligned metrics top-k recall / NDCG@k at each retention ratio in
+    ``val_ratios`` (k = round(ratio * n_video)). Recall@k is the metric that
+    actually predicts downstream quality: at retention r the scorer keeps the
+    top-k tokens, so what matters is how many of the teacher's top tokens survive.
 
     The scorer is switched to eval() for the pass and back to train() after.
     Uses the same truncated forward as training (no gradients flow anywhere).
+    Returns ``(metrics_dict, n_evaluated)``.
     """
     was_training = scorer.training
     scorer.eval()
     losses, rhos, n = [], [], 0
+    recalls = {r: [] for r in val_ratios}
+    ndcgs = {r: [] for r in val_ratios}
     for sample in val_dataset:
         if n >= max_samples:
             break
@@ -162,15 +170,30 @@ def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
             continue
         targets = targets.to(device)
         losses.append(listmle_loss(logits, targets, top_m=args.top_m).item())
-        rho = spearmanr(logits[0].float().cpu().numpy(), targets[0].float().cpu().numpy()).statistic
+        pred, teach = logits[0].float(), targets[0].float()
+        rho = spearmanr(pred.cpu().numpy(), teach.cpu().numpy()).statistic
         if rho == rho:  # skip NaN (constant inputs)
             rhos.append(rho)
+        n_video = pred.numel()
+        for r in val_ratios:
+            k = max(1, int(round(r * n_video)))
+            recalls[r].append(topk_recall(pred, teach, k))
+            nd = ndcg_at_k(pred, teach, k)
+            if nd == nd:
+                ndcgs[r].append(nd)
         n += 1
     if was_training:
         scorer.train()
-    mean_loss = sum(losses) / len(losses) if losses else float('nan')
-    mean_rho = sum(rhos) / len(rhos) if rhos else float('nan')
-    return mean_loss, mean_rho, n
+
+    def _mean(xs):
+        return sum(xs) / len(xs) if xs else float('nan')
+
+    metrics = {"val/loss": _mean(losses), "val/spearman_rho": _mean(rhos)}
+    for r in val_ratios:
+        pct = int(round(r * 100))
+        metrics[f"val/recall@{pct}"] = _mean(recalls[r])
+        metrics[f"val/ndcg@{pct}"] = _mean(ndcgs[r])
+    return metrics, n
 
 
 def train(args):
@@ -234,9 +257,14 @@ def train(args):
         print(f"Resuming from {args.resume} (step {resume_state['step']})")
 
     # The training begins! (scorer is created + set to train() lazily on the first batch)
+    # `step` counts *optimiser* steps; with --grad_accum > 1 each step accumulates
+    # gradients over that many samples (effective batch size) before updating.
     step = 0
+    micro = 0           # samples accumulated toward the current optimiser step
+    window_loss = 0.0   # un-scaled loss summed over the current accumulation window
     cumulativeLoss = 0.0
     last_loss = 0.0
+    last_logits = last_targets = None   # most recent sample, for the rho diagnostic
     best_val_rho = float('-inf')   # for best-checkpoint tracking
     # Raw (un-normalised) teacher scores accumulated over each log interval, used
     # to monitor the EVT Pareto tail index of visual-token importance.
@@ -316,19 +344,30 @@ def train(args):
             if raw_targets is not None:
                 raw_score_history.append(raw_targets.flatten().cpu())
             targets = targets.to(device)
-            loss = listmle_loss(logits, targets, top_m=args.top_m)
-            optimiser.zero_grad()
-
+            # Scale by grad_accum so the accumulated gradient is the *mean* over
+            # the effective batch, matching a single larger-batch update.
+            loss = listmle_loss(logits, targets, top_m=args.top_m) / args.grad_accum
             loss.backward()
+            micro += 1
+            window_loss += loss.item() * args.grad_accum   # track un-scaled loss
+            last_logits, last_targets = logits.detach(), targets.detach()
+
+            if micro < args.grad_accum:
+                continue   # keep accumulating before the optimiser step
+
+            # A full effective batch is ready -> update.
             nn.utils.clip_grad_norm_(scorer.parameters(), max_norm=1.0)
             optimiser.step()
             scheduler.step()
+            optimiser.zero_grad()
+            micro = 0
 
-            last_loss = loss.item()
+            last_loss = window_loss / args.grad_accum
+            window_loss = 0.0
             cumulativeLoss += last_loss
             step += 1
             if step % args.log_interval == 0:
-                rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
+                rho = spearmanr(last_logits[0].float().cpu().numpy(), last_targets[0].float().cpu().numpy()).statistic
                 avg_loss = cumulativeLoss / args.log_interval
                 msg = f"Step {step} / {args.max_steps}, Loss: {avg_loss:.4f}, Correlation (between target and predicted): {rho}"
                 metrics = {"train/loss": avg_loss, "train/spearman_rho": rho,
@@ -346,21 +385,27 @@ def train(args):
                     run.log(metrics, step=step)
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
-                save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
+                save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, last_loss)
             if val_dataset is not None and step % args.val_interval == 0:
-                val_loss, val_rho, n_val = run_validation(
+                val_metrics, n_val = run_validation(
                     model, processor, scorer, attn_extractor, val_dataset, args,
-                    device, special_ids, video_token_id, args.val_samples,
+                    device, special_ids, video_token_id, args.val_samples, args.val_ratios,
                 )
-                print(f"  [val] step {step}: loss {val_loss:.4f}, spearman_rho {val_rho:.4f} "
-                      f"over {n_val} samples")
+                rec_str = ", ".join(
+                    f"R@{int(round(r*100))} {val_metrics[f'val/recall@{int(round(r*100))}']:.3f}"
+                    for r in args.val_ratios
+                )
+                print(f"  [val] step {step}: loss {val_metrics['val/loss']:.4f}, "
+                      f"rho {val_metrics['val/spearman_rho']:.4f}, {rec_str} over {n_val} samples")
                 if run is not None:
-                    run.log({"val/loss": val_loss, "val/spearman_rho": val_rho}, step=step)
-                # Track the best scorer by validation rho.
+                    run.log(val_metrics, step=step)
+                # Track the best scorer by validation rho. (Switch to a recall@ key
+                # here if you'd rather select on the selection-aligned metric.)
+                val_rho = val_metrics["val/spearman_rho"]
                 if val_rho == val_rho and val_rho > best_val_rho:
                     best_val_rho = val_rho
                     save_checkpoint(scorer, optimiser, scheduler, step,
-                                    args.checkpoint_dir, val_loss, tag="best")
+                                    args.checkpoint_dir, val_metrics["val/loss"], tag="best")
 
     # Final checkpoint so the fully-trained scorer is always saved, even when
     # max_steps isn't a multiple of save_every. Skip if the last step already
@@ -382,6 +427,8 @@ def parse_args():
     arguments.add_argument("--val_video_root", type=str, default=None, help='Video root for the validation set. Defaults to --video_root.')
     arguments.add_argument("--val_interval", type=int, default=500, help='Run validation every this many steps.')
     arguments.add_argument("--val_samples", type=int, default=100, help='Number of held-out samples to evaluate each validation pass.')
+    arguments.add_argument("--val_ratios", type=float, nargs="+", default=[0.25, 0.5, 0.75], help='Retention ratios at which to report top-k recall / NDCG@k during validation.')
+    arguments.add_argument("--grad_accum", type=int, default=1, help='Accumulate gradients over this many samples per optimiser step (effective batch size). Reduces gradient noise vs the default bs=1.')
     arguments.add_argument("--hidden_dim", type=int, default=256, help='The hidden dimension of the scorer module.')
     arguments.add_argument("--layers", type=int, nargs="+", default=[12, 13, 14, 15, 16], help="The layers from which to extract the attention scores.")
     arguments.add_argument("--learning_rate", type=float, default=1e-4, help='The learning rate for the optimiser module.')
