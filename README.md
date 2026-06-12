@@ -49,6 +49,27 @@ ds = load_dataset("lmms-lab/NExTVideo", split="train")
 print(ds[0].keys())
 ```
 
+## Evaluation
+
+`evaluate.py` runs the **deployable** pipeline (paper Eq. 14): low-scoring video
+tokens are physically dropped before the LLM, surviving tokens keep their original
+M-RoPE positions, and the decoder runs on a shorter sequence — so wallclock
+speedup is real, not a masked information ceiling.
+
+```bash
+python evaluate.py \
+    --video_root /path/to/nextqa/videos \
+    --scorer_ckpt checkpoints/scorer_best.pt \
+    --rhos 0.25 0.50 0.75
+```
+
+Per retention ratio ρ it reports MC accuracy, accuracy retention vs. the full
+model, and wallclock speedup — both **LLM-only** (isolates the quadratic-cost
+claim) and **end-to-end** (incl. fixed ViT + scorer overhead) — plus the
+theoretical `1 − K/(T·N)` saving. A one-time self-test asserts the gated forward
+with ρ = 1.0 reproduces the full-model logits before any number is trusted.
+VideoMME / MVBench need their field layout added to `experiments/common.py`.
+
 ## Repository Structure
 
 ```
@@ -56,9 +77,11 @@ efficient_vlm/
 ├── __init__.py
 ├── scorer.py             # lightweight MLP scorer
 ├── attention_extractor.py # extracts language-to-video attention from frozen VLM
-└── loss.py               # ListMLE ranking loss
+├── loss.py               # ListMLE ranking loss
+├── utils.py              # Pareto tail-index budgeting + stratified selection
+└── gating.py             # deployable pre-projector token gating (M-RoPE preserved)
 train.py                  # online training loop
-evaluate.py               # evaluation (coming)
+evaluate.py               # deployable gated-inference eval (accuracy + wallclock)
 configs/
 └── default.yaml          # default hyperparameters
 requirements.txt
