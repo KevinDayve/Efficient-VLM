@@ -67,7 +67,7 @@ def run(args):
         n_video_ref = None
         for sample in questions:
             try:
-                prepared = common.prepare_inputs(model, processor, sample, args.max_frames)
+                prepared = common.prepare_inputs(model, processor, sample, args.max_frames, max_pixels=args.max_pixels)
             except Exception as e:
                 tqdm.write(f"skip {sample.qid}: {e}")
                 continue
@@ -158,6 +158,9 @@ def parse_args():
     p.add_argument("--video_ext", default="mp4")
     p.add_argument("--max_pairs", type=int, default=500)
     p.add_argument("--max_frames", type=int, default=8)
+    p.add_argument("--max_pixels", type=int, default=None,
+                   help="Cap per-frame resolution (pixels) to bound video-token count "
+                        "and memory. e.g. 50176 (224x224). None = Qwen dynamic resolution.")
     p.add_argument("--layers", type=int, nargs="+", default=[12, 13, 14, 15, 16])
     p.add_argument("--rho", type=float, default=0.20)
     p.add_argument("--gap_threshold", type=float, default=0.02,

@@ -77,7 +77,7 @@ def run(args):
 
     for sample in tqdm(samples):
         try:
-            prepared = common.prepare_inputs(model, processor, sample, args.max_frames)
+            prepared = common.prepare_inputs(model, processor, sample, args.max_frames, max_pixels=args.max_pixels)
         except Exception as e:  # missing video / no video tokens
             tqdm.write(f"skip {sample.qid}: {e}")
             continue
@@ -149,6 +149,9 @@ def parse_args():
     p.add_argument("--video_ext", default="mp4")
     p.add_argument("--max_pairs", type=int, default=400)
     p.add_argument("--max_frames", type=int, default=8)
+    p.add_argument("--max_pixels", type=int, default=None,
+                   help="Cap per-frame resolution (pixels) to bound video-token count "
+                        "and memory. e.g. 50176 (224x224). None = Qwen dynamic resolution.")
     p.add_argument("--window", type=int, default=3, help="sliding window size (2-4)")
     p.add_argument("--stride", type=int, default=1)
     p.add_argument("--sweep_min", type=int, default=8,
