@@ -264,6 +264,22 @@ def load_local_mc_jsonl(
     return samples
 
 
+def load_mc_samples(args) -> List["MCSample"]:
+    """Dispatch the MC sample loader shared by all experiments.
+
+    When ``args.data_file`` is set, load the local rhymes-ai/NeXTVideo jsonl
+    (nested ``./NExTVideo/<grp>/<id>.mp4`` paths resolved against ``video_root``)
+    -- the same split/layout used by train.py and evaluate.py. Otherwise fall
+    back to the ``lmms-lab/NExTQA`` Hub slice (flat ``video_root/<id>.ext`` paths).
+    """
+    if getattr(args, "data_file", None):
+        print(f"Loading local jsonl: {args.data_file}")
+        return load_local_mc_jsonl(args.data_file, args.video_root, args.max_pairs, args.seed)
+    return load_nextqa_dev(
+        args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Prompt building + MC evaluation
 # --------------------------------------------------------------------------- #

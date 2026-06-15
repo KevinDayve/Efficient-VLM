@@ -102,9 +102,7 @@ def run(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
 
-    samples = common.load_nextqa_dev(
-        args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
-    )
+    samples = common.load_mc_samples(args)
     feats, scores = build_cache(model, processor, samples, args)
     if len(feats) < 4:
         raise RuntimeError(f"Only cached {len(feats)} samples -- need more for a train/val split.")
@@ -156,6 +154,9 @@ def parse_args():
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--dataset_name", default="lmms-lab/NExTQA")
     p.add_argument("--split", default="test")
+    p.add_argument("--data_file", type=str, default=None,
+                   help="Path to a local jsonl (rhymes-ai/NeXTVideo format). When set, "
+                        "overrides --dataset_name and resolves nested video paths against --video_root.")
     p.add_argument("--video_root", required=True)
     p.add_argument("--video_ext", default="mp4")
     p.add_argument("--max_pairs", type=int, default=400)

@@ -108,9 +108,7 @@ def run(args):
     if needs_scorer and not args.scorer_ckpt:
         raise ValueError("strategy 'ours' requires --scorer_ckpt (train it with exp_f).")
 
-    samples = common.load_nextqa_dev(
-        args.dataset_name, args.split, args.video_root, args.max_pairs, args.video_ext, args.seed
-    )
+    samples = common.load_mc_samples(args)
     print(f"Benchmark: {len(samples)} pairs | strategies={strategies} | rhos={args.rhos}")
 
     correct = {s: {r: 0 for r in args.rhos} for s in strategies}
@@ -195,6 +193,9 @@ def parse_args():
     p.add_argument("--dataset_name", default="lmms-lab/NExTQA",
                    help="swap for VideoMME / MVBench / EgoSchema mirrors per the plan")
     p.add_argument("--split", default="test")
+    p.add_argument("--data_file", type=str, default=None,
+                   help="Path to a local jsonl (rhymes-ai/NeXTVideo format). When set, "
+                        "overrides --dataset_name and resolves nested video paths against --video_root.")
     p.add_argument("--video_root", required=True)
     p.add_argument("--video_ext", default="mp4")
     p.add_argument("--max_pairs", type=int, default=400)
