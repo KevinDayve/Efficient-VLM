@@ -1,6 +1,7 @@
 from efficient_vlm.attention_extractor import AttentionExtractor
 from efficient_vlm.loss import listmle_loss
 from efficient_vlm.scorer import Scorer
+from efficient_vlm.utils import einmahlHaan
 import os
 import warnings
 from typing import List
@@ -65,10 +66,20 @@ def make_conversation(sample, video_root, max_frames: int = 8):
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    run = None
+    if args.wandb:
+        import wandb
+        run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            entity=args.wandb_entity,
+            config=vars(args),
+        )
     model =  Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name,
         torch_dtype=torch.float16 if args.fp16 else torch.float32,
-        device_map="auto"
+        device_map="auto",
+        attn_implementation="eager",
     )
     model.eval()
     processor = Qwen2_5_VLProcessor.from_pretrained(args.model_name, use_fast=True)
@@ -124,6 +135,7 @@ def train(args):
             video_grid_thw = inputs['video_grid_thw'].to(device)
             n_video = count_video_tokens(input_ids, video_token_id)
             if n_video == 0:
+                warnings.warn("[WARNING] No video tokens found, skipping the example.")
                 continue
             attn_extractor.set_sample(input_ids, video_token_id, special_ids)
             patch_embeds = get_patch_embeds(model, pixel_values, video_grid_thw).to(device)
@@ -141,7 +153,8 @@ def train(args):
                     )
             # for the distribution shape: Empirical
             targets_logging = attn_extractor.get_scores(normalise=False)
-            x_i_histroy.append(targets_logging)
+            if targets_logging is not None:
+                x_i_histroy.append(einmahlHaan(scores=targets_logging[0]))
             targets = attn_extractor.get_scores()
             if targets is None:
                 warnings.warn("No attention scores extracted. Thus, skipping this sample.")
@@ -160,9 +173,17 @@ def train(args):
             cumulativeLoss += loss.item()
             step += 1
             if step % args.log_interval == 0:
-                x_i_median = float(np.median(x_i_histroy))
+                x_i_median = float(np.median(x_i_histroy)) if x_i_histroy else float("nan")
                 rho = spearmanr(logits[0].detach().float().cpu().numpy(), targets[0].detach().float().cpu().numpy()).statistic
-                print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}")
+                print(f"Step {step} / {args.max_steps}, Loss: {cumulativeLoss / args.log_interval:.4f}, Correlation (between target and predicted): {rho}; Median extreme-value-theorem derived tail: {x_i_median:.4f}.")
+                metrics = {
+                    "train/loss": cumulativeLoss / args.log_interval,
+                    "train/spearman_rho": rho,
+                    "train/lr": scheduler.get_last_lr()[0],
+                    "train/extreme-value-tail": x_i_median
+                }
+                if run is not None:
+                    run.log(metrics, step=step)
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
