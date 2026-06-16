@@ -79,7 +79,7 @@ def make_conversation(sample, video_root, max_frames: int = 8, max_pixels: int =
         ]
     }
 
-def make_conversation_local(record: dict, video_root: str, default_frames: int = 8, max_pixels: int = None):
+def make_conversation_local(record: dict, video_root: str, max_frames: int = 8, max_pixels: int = None):
     """Adapt a rhymes-ai/NeXTVideo jsonl record to the prompt format the loop expects.
 
     Each record already carries a chat-style ``messages`` list (question + options
@@ -94,7 +94,9 @@ def make_conversation_local(record: dict, video_root: str, default_frames: int =
     processor sees them.
     """
     rel_path = record["video"]["path"]
-    nframes = int(record["video"].get("num_frames", default_frames))
+    # Override the per-record num_frames so the frame count is fixed by --max_frames
+    # and matches evaluate.py (keeps the scorer's token counts consistent train/eval).
+    nframes = max_frames
     abs_path = os.path.normpath(os.path.join(video_root, rel_path))
     prompt = []
     for msg in record["messages"]:
@@ -111,11 +113,11 @@ def make_conversation_local(record: dict, video_root: str, default_frames: int =
     return {"prompt": prompt}
 
 
-def load_local_jsonl(data_file: str, video_root: str, seed: int, max_pixels: int = None):
+def load_local_jsonl(data_file: str, video_root: str, seed: int, max_frames: int = 8, max_pixels: int = None):
     with open(data_file) as fh:
         records = [json.loads(line) for line in fh if line.strip()]
     random.Random(seed).shuffle(records)
-    return [make_conversation_local(r, video_root, max_pixels=max_pixels) for r in records]
+    return [make_conversation_local(r, video_root, max_frames=max_frames, max_pixels=max_pixels) for r in records]
 
 
 @torch.no_grad()
@@ -218,9 +220,14 @@ def train(args):
             entity=args.wandb_entity,
             config=vars(args),
         )
+    # Use bfloat16 (not float16) for the frozen VLM: Qwen2.5-VL's activations and
+    # attention logits routinely exceed float16's max (~65504). With eager attention
+    # the overflowing QK^T scores become inf -> softmax emits nan, which poisons the
+    # captured teacher attention. bf16 shares float32's exponent range, so it doesn't
+    # overflow. Supported on Ampere+ (A10G/A100/H100).
     model =  Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name,
-        torch_dtype=torch.float16 if args.fp16 else torch.float32,
+        torch_dtype=torch.bfloat16 if args.fp16 else torch.float32,
         device_map="auto",
         attn_implementation="eager",
     )
@@ -242,11 +249,11 @@ def train(args):
     scheduler = None
     if args.data_file:
         print(f"Loading local jsonl: {args.data_file}")
-        dataset = load_local_jsonl(args.data_file, args.video_root, args.seed, max_pixels=args.max_pixels)
+        dataset = load_local_jsonl(args.data_file, args.video_root, args.seed, max_frames=args.max_frames, max_pixels=args.max_pixels)
         print(f"Loaded {len(dataset)} local samples.")
     else:
         dataset = load_dataset(args.dataset_name, split='train')
-        dataset = dataset.map(lambda x: make_conversation(x, args.video_root, max_pixels=args.max_pixels))
+        dataset = dataset.map(lambda x: make_conversation(x, args.video_root, max_frames=args.max_frames, max_pixels=args.max_pixels))
         dataset = dataset.shuffle(seed=args.seed)
 
     # Held-out validation set (optional). Shuffled with a fixed seed so the first
@@ -254,7 +261,7 @@ def train(args):
     val_dataset = None
     if args.val_file:
         val_root = args.val_video_root or args.video_root
-        val_dataset = load_local_jsonl(args.val_file, val_root, args.seed, max_pixels=args.max_pixels)
+        val_dataset = load_local_jsonl(args.val_file, val_root, args.seed, max_frames=args.max_frames, max_pixels=args.max_pixels)
         print(f"Loaded {len(val_dataset)} val samples from {args.val_file}")
 
     attn_extractor = AttentionExtractor(model, Layers=args.layers)
@@ -449,10 +456,11 @@ def parse_args():
     arguments.add_argument("--log_interval", type=int, default=500, help='The interval (in steps) at which to log the training loss.')
     arguments.add_argument("--save_every", type=int, default=1000, help='The interval (in steps) at which to save model checkpoints.')
     arguments.add_argument("--top_m", type=int, default=None, help="The listmle loss to run over top m tokens to avoid noisy gradients. Defaults to `None`.")
-    arguments.add_argument("--fp16", action="store_true", help="Load the frozen VLM in float16 (recommended for fitting/speed).")
+    arguments.add_argument("--fp16", action="store_true", help="Load the frozen VLM in half precision (bfloat16 -- recommended for fitting/speed; float16 overflows on Qwen2.5-VL and produces NaN attention).")
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
     arguments.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume scorer/optimiser/scheduler and step from.")
+    arguments.add_argument("--max_frames", type=int, default=8, help="Number of frames sampled per video. Sets nframes directly (overriding any per-record num_frames) so training matches evaluate.py's --max_frames and the token counts line up.")
     arguments.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (in pixels, e.g. 100352 = 128*28*28) to bound sequence length and attention memory. Lower this to fix OOM.")
     arguments.add_argument("--wandb", action="store_true", help="Log metrics to Weights & Biases.")
     arguments.add_argument("--wandb_project", type=str, default="efficientvlm", help="W&B project name.")

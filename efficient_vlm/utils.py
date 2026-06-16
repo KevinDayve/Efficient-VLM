@@ -4,10 +4,25 @@ Script to monitor the Dekkers Einmahl de Haan moment estimator of the EVT tail i
 import torch
 
 def einmahlHaan(scores: torch.Tensor, k_frac: float = 0.10) -> float:
+    """Dekkers-Einmahl-de Haan moment estimator of the EVT index gamma.
+
+    Unlike the Hill estimator (:func:`hill_tail_index`), which is constrained to
+    gamma >= 0 and so always signals a heavy tail, the moment estimator is
+    sign-aware: it returns gamma <= 0 when the upper tail is light/bounded. The
+    budget allocator relies on this -- a non-positive gamma collapses the per-bin
+    weighting to uniform, the desired behaviour when importance is not
+    concentrated. Its first term M1 is exactly the Hill estimator.
+
+    Returns NaN when there aren't enough positive samples to estimate; the
+    allocator treats NaN as gamma -> uniform allocation (beta = 0).
+    """
     x = scores.flatten().float()
     x = x[x > 0].sort().values
     n = x.numel()
+    if n < 12:
+        return float("nan")
     k = max(10, int(k_frac * n))
+    k = min(k, n - 1)
     logs = torch.log(x[n-k:]) - torch.log(x[n-k-1])
     M1 = logs.mean()
     M2 = (logs ** 2).mean()
@@ -68,7 +83,9 @@ def pareto_budget(
     K = int(min(K, n_video))
 
     p = torch.softmax(scores.float(), dim=-1)          # positive, heavy-tailed
-    gamma = hill_tail_index(p)
+    # Sign-aware moment estimator: gamma <= 0 (light tail) -> beta = 0 -> uniform
+    # per-bin allocation. Hill (always >= 0) cannot signal a non-heavy tail.
+    gamma = einmahlHaan(p)
     beta = 0.0 if gamma != gamma else max(0.0, min(temp * gamma, beta_max))
 
     m = p.view(T, N).sum(dim=1)                        # per-bin mass (T,)
