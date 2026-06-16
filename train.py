@@ -220,14 +220,16 @@ def train(args):
             entity=args.wandb_entity,
             config=vars(args),
         )
-    # Use bfloat16 (not float16) for the frozen VLM: Qwen2.5-VL's activations and
-    # attention logits routinely exceed float16's max (~65504). With eager attention
-    # the overflowing QK^T scores become inf -> softmax emits nan, which poisons the
-    # captured teacher attention. bf16 shares float32's exponent range, so it doesn't
-    # overflow. Supported on Ampere+ (A10G/A100/H100).
+    # Resolve the compute dtype for the frozen VLM. bf16 is the default and the
+    # right choice on Ampere+ (A10G/A100/H100): Qwen2.5-VL's activations and
+    # attention logits routinely exceed float16's max (~65504), so with eager
+    # attention the overflowing QK^T scores become inf -> softmax emits nan, which
+    # poisons the captured teacher attention. bf16 shares float32's exponent range,
+    # so it doesn't overflow. fp16 is only for pre-Ampere GPUs (T4/V100) lacking bf16.
+    dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
     model =  Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name,
-        torch_dtype=torch.bfloat16 if args.fp16 else torch.float32,
+        torch_dtype=dtype_map[args.dtype],
         device_map="auto",
         attn_implementation="eager",
     )
@@ -337,7 +339,7 @@ def train(args):
                     resume_state = None
 
             # forward for the scoring module; keep the scorer in fp32 (stable for
-            # LayerNorm/AdamW) and cast the fp16 features up to match its weights.
+            # LayerNorm/AdamW) and cast the half-precision features up to match its weights.
             logits = scorer(patch_embeds.float())
             # Truncated forward: capture attention at the critical layers and abort
             # right after max(layers), so the VLM never computes the layers above.
@@ -456,7 +458,7 @@ def parse_args():
     arguments.add_argument("--log_interval", type=int, default=500, help='The interval (in steps) at which to log the training loss.')
     arguments.add_argument("--save_every", type=int, default=1000, help='The interval (in steps) at which to save model checkpoints.')
     arguments.add_argument("--top_m", type=int, default=None, help="The listmle loss to run over top m tokens to avoid noisy gradients. Defaults to `None`.")
-    arguments.add_argument("--fp16", action="store_true", help="Load the frozen VLM in half precision (bfloat16 -- recommended for fitting/speed; float16 overflows on Qwen2.5-VL and produces NaN attention).")
+    arguments.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16", help="Compute dtype for the frozen VLM. bf16 (default) is recommended on Ampere+ (A10G/A100/H100); fp16 is only for pre-Ampere GPUs (T4/V100) and risks NaN attention on Qwen2.5-VL; fp32 for max precision at 2x memory.")
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
     arguments.add_argument("--resume", type=str, default=None, help="Path to a checkpoint (.pt) to resume scorer/optimiser/scheduler and step from.")
