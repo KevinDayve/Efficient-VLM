@@ -1,0 +1,552 @@
+diff --git a/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py b/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
+index 45e1f23b56..e01d82f29d 100644
+--- a/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
++++ b/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
+@@ -879,6 +879,115 @@ class Qwen2_5_VLTextModel(Qwen2_5_VLPreTrainedModel):
+         )
+ 
+ 
++class Qwen2_5_VLTokenScorer(nn.Module):
++    """Lightweight MLP that scores each (post-merger) video token for importance.
++
++    Matches the trained scorer checkpoint layout: ``inputNorm`` (LayerNorm) ->
++    ``mlp`` (Linear + GELU) -> ``head`` (Linear to a scalar). It operates on the
++    same merged video embeddings the model scatters into the ``<|video_pad|>``
++    positions, so a token's score is computed from exactly the feature that token
++    would contribute to the LLM.
++    """
++
++    def __init__(self, input_dim: int, hidden_dim: int = 256):
++        super().__init__()
++        self.input_dim = input_dim
++        self.inputNorm = nn.LayerNorm(input_dim)
++        self.mlp = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.GELU())
++        self.head = nn.Linear(hidden_dim, 1)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        # x: (..., input_dim) -> scores: (...,)
++        return self.head(self.mlp(self.inputNorm(x))).squeeze(-1)
++
++
++def _einmahl_haan_gamma(scores: torch.Tensor, k_frac: float = 0.10) -> float:
++    """Sign-aware moment estimator of the EVT tail index gamma.
++
++    Returns ``gamma <= 0`` for a light/bounded upper tail (collapsing the budget
++    allocator to a uniform per-frame split) and ``NaN`` when there are too few
++    positive samples to estimate.
++    """
++    x = scores.flatten().float()
++    x = x[x > 0].sort().values
++    n = x.numel()
++    if n < 12:
++        return float("nan")
++    k = min(max(10, int(k_frac * n)), n - 1)
++    logs = torch.log(x[n - k :]) - torch.log(x[n - k - 1])
++    m1 = logs.mean()
++    m2 = (logs**2).mean()
++    return (m1 + 1.0 - 0.5 / (1.0 - m1**2 / m2)).item()
++
++
++def _pareto_budget(
++    scores: torch.Tensor, n_frames: int, k: int, k_min: int = 1, temp: float = 1.0, beta_max: float = 3.0
++) -> torch.Tensor:
++    """Per-frame token budgets (length ``n_frames``) summing to ``k``.
++
++    The split is a tempered power law of each frame's predicted-importance mass,
++    ``w_t ∝ m_t ** beta`` with ``beta = clamp(temp * gamma, 0, beta_max)`` and
++    ``gamma`` the Pareto tail index over all tokens. ``beta -> 0`` recovers a
++    uniform per-frame split; large ``beta`` approaches global top-k. The ``k_min``
++    floor guarantees temporal coverage; budgets are capped at the per-frame token
++    count and any overflow is redistributed so the result sums to ``k``.
++    """
++    n_video = scores.numel()
++    T = n_frames
++    N = n_video // T
++    k = int(min(k, n_video))
++    p = torch.softmax(scores.float(), dim=-1)
++    gamma = _einmahl_haan_gamma(p)
++    beta = 0.0 if gamma != gamma else max(0.0, min(temp * gamma, beta_max))
++    m = p.view(T, N).sum(dim=1)
++    w = m.pow(beta)
++    w = w / w.sum().clamp_min(1e-12)
++    k_min = max(0, min(k_min, k // T))
++    spendable = k - k_min * T
++    frac = spendable * w
++    k_t = k_min + frac.floor().long()
++    deficit = k - int(k_t.sum().item())
++    if deficit > 0:
++        top = torch.topk(frac - frac.floor(), min(deficit, T)).indices
++        k_t[top] += 1
++    k_t = k_t.clamp(max=N)
++    while True:
++        short = k - int(k_t.sum().item())
++        if short <= 0:
++            break
++        cand = torch.where(k_t < N)[0]
++        if cand.numel() == 0:
++            break
++        order = cand[torch.argsort(w[cand], descending=True)]
++        k_t[order[:short]] += 1
++    return k_t
++
++
++def _select_pareto_stratified(
++    scores: torch.Tensor, k: int, n_frames: int, k_min: int = 1, temp: float = 1.0, beta_max: float = 3.0
++) -> torch.Tensor:
++    """Indices (sorted ascending) of the video tokens kept under stratified
++    per-frame Pareto budgeting. Falls back to a global top-k when the tokens do
++    not divide evenly into ``n_frames`` temporal bins."""
++    n_video = scores.numel()
++    if n_frames <= 0 or n_video % n_frames != 0:
++        return torch.sort(torch.topk(scores, min(k, n_video)).indices).values
++    T = n_frames
++    N = n_video // T
++    budgets = _pareto_budget(scores, T, k, k_min=k_min, temp=temp, beta_max=beta_max)
++    kept = []
++    for t in range(T):
++        bt = int(budgets[t].item())
++        if bt == 0:
++            continue
++        offset = t * N
++        local = torch.topk(scores[offset : offset + N], k=bt).indices
++        kept.append(local + offset)
++    if not kept:
++        return torch.sort(torch.topk(scores, min(k, n_video)).indices).values
++    return torch.sort(torch.cat(kept)).values
++
++
+ @auto_docstring
+ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
+     base_model_prefix = "model"
+@@ -892,10 +1001,124 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
+         self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
+         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
+         self.rope_deltas = None  # cache rope_deltas here
++        # Learned video-token gating (disabled until a scorer is attached).
++        self.token_scorer: Qwen2_5_VLTokenScorer | None = None
++        self.token_keep_ratio: float | None = None
++        self.token_gating_k_min = 1
++        self.token_gating_temp = 1.0
++        self.token_gating_beta_max = 3.0
+ 
+         # Initialize weights and apply final processing
+         self.post_init()
+ 
++    def load_token_scorer(
++        self,
++        scorer,
++        keep_ratio: float = 0.5,
++        hidden_dim: int = 256,
++        k_min: int = 1,
++        temp: float = 1.0,
++        beta_max: float = 3.0,
++    ):
++        """Attach a trained token scorer and enable pre-LLM video-token gating.
++
++        ``scorer`` may be a :class:`Qwen2_5_VLTokenScorer`, a path to a checkpoint
++        saved by the training script (a ``{"model_state": ...}`` dict or a bare
++        state dict), or a raw ``state_dict``. ``keep_ratio`` (rho) is the fraction
++        of video tokens retained per clip. With gating enabled, low-scoring video
++        tokens are physically dropped before the language model on the prefill,
++        so the decoder runs on a genuinely shorter sequence.
++        """
++        input_dim = self.config.text_config.hidden_size
++        if isinstance(scorer, Qwen2_5_VLTokenScorer):
++            module = scorer
++        else:
++            state = torch.load(scorer, map_location="cpu", weights_only=False) if isinstance(scorer, str) else scorer
++            if isinstance(state, dict) and "model_state" in state:
++                state = state["model_state"]
++            module = Qwen2_5_VLTokenScorer(input_dim=input_dim, hidden_dim=hidden_dim)
++            module.load_state_dict(state)
++        self.token_scorer = module.to(device=self.device).eval()
++        self.token_keep_ratio = keep_ratio
++        self.token_gating_k_min = k_min
++        self.token_gating_temp = temp
++        self.token_gating_beta_max = beta_max
++        return self
++
++    def disable_token_gating(self):
++        """Turn gating off without detaching the scorer (a full forward resumes)."""
++        self.token_keep_ratio = None
++        return self
++
++    @torch.no_grad()
++    def _gate_video_tokens(
++        self, inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
++    ):
++        """Drop low-scoring video tokens before the LLM (paper Eq. 14).
++
++        Surviving tokens keep their original M-RoPE position ids -- there is no
++        positional re-indexing -- and the decoder then runs on a physically
++        shorter sequence. Only batch size 1 is supported (the deployable
++        single-clip setting); batched inputs are returned unchanged. This is the
++        single-forward path (scoring / MC readout); ``rope_deltas`` is refreshed for
++        position bookkeeping, but standard ``.generate()`` is not supported -- it
++        keeps the full-length attention mask while the cache is shortened. Use a
++        ``use_cache=False`` greedy loop for generation.
++        """
++        if inputs_embeds.shape[0] != 1 or self.token_keep_ratio is None:
++            return inputs_embeds, position_ids, attention_mask
++        if position_ids is None:
++            # Gating must preserve each surviving token's original M-RoPE id. Without
++            # precomputed position_ids we'd drop tokens and let the model build a plain
++            # arange over the shortened sequence, silently corrupting positions. Skip
++            # instead (pass mm_token_type_ids so the 3D positions get built).
++            logger.warning_once(
++                "Token gating requires precomputed M-RoPE position_ids but none were available "
++                "(pass mm_token_type_ids). Skipping gating for this forward."
++            )
++            return inputs_embeds, position_ids, attention_mask
++
++        device = inputs_embeds.device
++        # absolute sequence indices of the video placeholder tokens, in order
++        vid_pos = video_mask[0, :, 0].nonzero(as_tuple=False).flatten()
++        if vid_pos.numel() == 0:
++            return inputs_embeds, position_ids, attention_mask
++
++        scorer = self.token_scorer.to(video_embeds.device)
++        scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
++
++        # Per-video stratified selection (a single sequence may pack several clips).
++        merge = self.config.vision_config.spatial_merge_size**2
++        kept_local, start = [], 0
++        for thw in video_grid_thw:
++            t = int(thw[0].item())
++            chunk = int(thw.prod().item()) // merge
++            k = max(1, int(round(self.token_keep_ratio * chunk)))
++            idx = _select_pareto_stratified(
++                scores_all[start : start + chunk],
++                k,
++                t,
++                k_min=self.token_gating_k_min,
++                temp=self.token_gating_temp,
++                beta_max=self.token_gating_beta_max,
++            )
++            kept_local.append(idx + start)
++            start += chunk
++        kept_local = torch.cat(kept_local)
++
++        # keep every non-video token plus the selected video tokens
++        keep_mask = torch.ones(inputs_embeds.shape[1], dtype=torch.bool, device=device)
++        keep_mask[vid_pos] = False
++        keep_mask[vid_pos[kept_local]] = True
++
++        inputs_embeds = inputs_embeds[:, keep_mask, :]
++        position_ids = position_ids[:, :, keep_mask]  # guaranteed non-None (guarded above)
++        # delta = max_kept_position + 1 - kept_seq_len, keeps rope_deltas consistent
++        self.rope_deltas = (position_ids.max() + 1 - inputs_embeds.shape[1]).reshape(1, 1)
++        if attention_mask is not None:
++            attention_mask = attention_mask[:, keep_mask]
++        return inputs_embeds, position_ids, attention_mask
++
+     def get_vision_position_ids(
+         self,
+         start_position: int,
+@@ -1264,6 +1487,14 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
+                 mm_token_type_ids=mm_token_type_ids,
+             )
+ 
++        # Learned video-token gating: drop low-scoring video tokens before the LLM
++        # (only on the prefill, where pixel_values_videos and the merged
++        # video_embeds/video_mask are available).
++        if self.token_keep_ratio is not None and self.token_scorer is not None and pixel_values_videos is not None:
++            inputs_embeds, position_ids, attention_mask = self._gate_video_tokens(
++                inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
++            )
++
+         outputs = self.language_model(
+             input_ids=None,
+             position_ids=position_ids,
+@@ -1307,6 +1538,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2_5_VLPreTrainedModel, GenerationMi
+ 
+         self.post_init()
+ 
++    def load_token_scorer(self, *args, **kwargs):
++        """Attach a trained token scorer and enable video-token gating (delegates
++        to :meth:`Qwen2_5_VLModel.load_token_scorer`)."""
++        self.model.load_token_scorer(*args, **kwargs)
++        return self
++
++    def disable_token_gating(self):
++        """Turn video-token gating off (delegates to the inner model)."""
++        self.model.disable_token_gating()
++        return self
++
+     @auto_docstring
+     def get_video_features(
+         self,
+diff --git a/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py b/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
+index 0c0ada0eaa..112772854b 100644
+--- a/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
++++ b/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
+@@ -304,6 +304,115 @@ class Qwen2_5_VLModelOutputWithPast(Qwen2VLModelOutputWithPast):
+     pass
+ 
+ 
++class Qwen2_5_VLTokenScorer(nn.Module):
++    """Lightweight MLP that scores each (post-merger) video token for importance.
++
++    Matches the trained scorer checkpoint layout: ``inputNorm`` (LayerNorm) ->
++    ``mlp`` (Linear + GELU) -> ``head`` (Linear to a scalar). It operates on the
++    same merged video embeddings the model scatters into the ``<|video_pad|>``
++    positions, so a token's score is computed from exactly the feature that token
++    would contribute to the LLM.
++    """
++
++    def __init__(self, input_dim: int, hidden_dim: int = 256):
++        super().__init__()
++        self.input_dim = input_dim
++        self.inputNorm = nn.LayerNorm(input_dim)
++        self.mlp = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.GELU())
++        self.head = nn.Linear(hidden_dim, 1)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        # x: (..., input_dim) -> scores: (...,)
++        return self.head(self.mlp(self.inputNorm(x))).squeeze(-1)
++
++
++def _einmahl_haan_gamma(scores: torch.Tensor, k_frac: float = 0.10) -> float:
++    """Sign-aware moment estimator of the EVT tail index gamma.
++
++    Returns ``gamma <= 0`` for a light/bounded upper tail (collapsing the budget
++    allocator to a uniform per-frame split) and ``NaN`` when there are too few
++    positive samples to estimate.
++    """
++    x = scores.flatten().float()
++    x = x[x > 0].sort().values
++    n = x.numel()
++    if n < 12:
++        return float("nan")
++    k = min(max(10, int(k_frac * n)), n - 1)
++    logs = torch.log(x[n - k :]) - torch.log(x[n - k - 1])
++    m1 = logs.mean()
++    m2 = (logs**2).mean()
++    return (m1 + 1.0 - 0.5 / (1.0 - m1**2 / m2)).item()
++
++
++def _pareto_budget(
++    scores: torch.Tensor, n_frames: int, k: int, k_min: int = 1, temp: float = 1.0, beta_max: float = 3.0
++) -> torch.Tensor:
++    """Per-frame token budgets (length ``n_frames``) summing to ``k``.
++
++    The split is a tempered power law of each frame's predicted-importance mass,
++    ``w_t ∝ m_t ** beta`` with ``beta = clamp(temp * gamma, 0, beta_max)`` and
++    ``gamma`` the Pareto tail index over all tokens. ``beta -> 0`` recovers a
++    uniform per-frame split; large ``beta`` approaches global top-k. The ``k_min``
++    floor guarantees temporal coverage; budgets are capped at the per-frame token
++    count and any overflow is redistributed so the result sums to ``k``.
++    """
++    n_video = scores.numel()
++    T = n_frames
++    N = n_video // T
++    k = int(min(k, n_video))
++    p = torch.softmax(scores.float(), dim=-1)
++    gamma = _einmahl_haan_gamma(p)
++    beta = 0.0 if gamma != gamma else max(0.0, min(temp * gamma, beta_max))
++    m = p.view(T, N).sum(dim=1)
++    w = m.pow(beta)
++    w = w / w.sum().clamp_min(1e-12)
++    k_min = max(0, min(k_min, k // T))
++    spendable = k - k_min * T
++    frac = spendable * w
++    k_t = k_min + frac.floor().long()
++    deficit = k - int(k_t.sum().item())
++    if deficit > 0:
++        top = torch.topk(frac - frac.floor(), min(deficit, T)).indices
++        k_t[top] += 1
++    k_t = k_t.clamp(max=N)
++    while True:
++        short = k - int(k_t.sum().item())
++        if short <= 0:
++            break
++        cand = torch.where(k_t < N)[0]
++        if cand.numel() == 0:
++            break
++        order = cand[torch.argsort(w[cand], descending=True)]
++        k_t[order[:short]] += 1
++    return k_t
++
++
++def _select_pareto_stratified(
++    scores: torch.Tensor, k: int, n_frames: int, k_min: int = 1, temp: float = 1.0, beta_max: float = 3.0
++) -> torch.Tensor:
++    """Indices (sorted ascending) of the video tokens kept under stratified
++    per-frame Pareto budgeting. Falls back to a global top-k when the tokens do
++    not divide evenly into ``n_frames`` temporal bins."""
++    n_video = scores.numel()
++    if n_frames <= 0 or n_video % n_frames != 0:
++        return torch.sort(torch.topk(scores, min(k, n_video)).indices).values
++    T = n_frames
++    N = n_video // T
++    budgets = _pareto_budget(scores, T, k, k_min=k_min, temp=temp, beta_max=beta_max)
++    kept = []
++    for t in range(T):
++        bt = int(budgets[t].item())
++        if bt == 0:
++            continue
++        offset = t * N
++        local = torch.topk(scores[offset : offset + N], k=bt).indices
++        kept.append(local + offset)
++    if not kept:
++        return torch.sort(torch.topk(scores, min(k, n_video)).indices).values
++    return torch.sort(torch.cat(kept)).values
++
++
+ class Qwen2_5_VLModel(Qwen2VLModel):
+     config: Qwen2_5_VLConfig
+     base_model_prefix = "model"
+@@ -314,6 +423,120 @@ class Qwen2_5_VLModel(Qwen2VLModel):
+     def __init__(self, config):
+         super().__init__(config)
+         self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
++        # Learned video-token gating (disabled until a scorer is attached).
++        self.token_scorer: Qwen2_5_VLTokenScorer | None = None
++        self.token_keep_ratio: float | None = None
++        self.token_gating_k_min = 1
++        self.token_gating_temp = 1.0
++        self.token_gating_beta_max = 3.0
++
++    def load_token_scorer(
++        self,
++        scorer,
++        keep_ratio: float = 0.5,
++        hidden_dim: int = 256,
++        k_min: int = 1,
++        temp: float = 1.0,
++        beta_max: float = 3.0,
++    ):
++        """Attach a trained token scorer and enable pre-LLM video-token gating.
++
++        ``scorer`` may be a :class:`Qwen2_5_VLTokenScorer`, a path to a checkpoint
++        saved by the training script (a ``{"model_state": ...}`` dict or a bare
++        state dict), or a raw ``state_dict``. ``keep_ratio`` (rho) is the fraction
++        of video tokens retained per clip. With gating enabled, low-scoring video
++        tokens are physically dropped before the language model on the prefill,
++        so the decoder runs on a genuinely shorter sequence.
++        """
++        input_dim = self.config.text_config.hidden_size
++        if isinstance(scorer, Qwen2_5_VLTokenScorer):
++            module = scorer
++        else:
++            state = torch.load(scorer, map_location="cpu", weights_only=False) if isinstance(scorer, str) else scorer
++            if isinstance(state, dict) and "model_state" in state:
++                state = state["model_state"]
++            module = Qwen2_5_VLTokenScorer(input_dim=input_dim, hidden_dim=hidden_dim)
++            module.load_state_dict(state)
++        self.token_scorer = module.to(device=self.device).eval()
++        self.token_keep_ratio = keep_ratio
++        self.token_gating_k_min = k_min
++        self.token_gating_temp = temp
++        self.token_gating_beta_max = beta_max
++        return self
++
++    def disable_token_gating(self):
++        """Turn gating off without detaching the scorer (a full forward resumes)."""
++        self.token_keep_ratio = None
++        return self
++
++    @torch.no_grad()
++    def _gate_video_tokens(
++        self, inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
++    ):
++        """Drop low-scoring video tokens before the LLM (paper Eq. 14).
++
++        Surviving tokens keep their original M-RoPE position ids -- there is no
++        positional re-indexing -- and the decoder then runs on a physically
++        shorter sequence. Only batch size 1 is supported (the deployable
++        single-clip setting); batched inputs are returned unchanged. This is the
++        single-forward path (scoring / MC readout); ``rope_deltas`` is refreshed for
++        position bookkeeping, but standard ``.generate()`` is not supported -- it
++        keeps the full-length attention mask while the cache is shortened. Use a
++        ``use_cache=False`` greedy loop for generation.
++        """
++        if inputs_embeds.shape[0] != 1 or self.token_keep_ratio is None:
++            return inputs_embeds, position_ids, attention_mask
++        if position_ids is None:
++            # Gating must preserve each surviving token's original M-RoPE id. Without
++            # precomputed position_ids we'd drop tokens and let the model build a plain
++            # arange over the shortened sequence, silently corrupting positions. Skip
++            # instead (pass mm_token_type_ids so the 3D positions get built).
++            logger.warning_once(
++                "Token gating requires precomputed M-RoPE position_ids but none were available "
++                "(pass mm_token_type_ids). Skipping gating for this forward."
++            )
++            return inputs_embeds, position_ids, attention_mask
++
++        device = inputs_embeds.device
++        # absolute sequence indices of the video placeholder tokens, in order
++        vid_pos = video_mask[0, :, 0].nonzero(as_tuple=False).flatten()
++        if vid_pos.numel() == 0:
++            return inputs_embeds, position_ids, attention_mask
++
++        scorer = self.token_scorer.to(video_embeds.device)
++        scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
++
++        # Per-video stratified selection (a single sequence may pack several clips).
++        merge = self.config.vision_config.spatial_merge_size**2
++        kept_local, start = [], 0
++        for thw in video_grid_thw:
++            t = int(thw[0].item())
++            chunk = int(thw.prod().item()) // merge
++            k = max(1, int(round(self.token_keep_ratio * chunk)))
++            idx = _select_pareto_stratified(
++                scores_all[start : start + chunk],
++                k,
++                t,
++                k_min=self.token_gating_k_min,
++                temp=self.token_gating_temp,
++                beta_max=self.token_gating_beta_max,
++            )
++            kept_local.append(idx + start)
++            start += chunk
++        kept_local = torch.cat(kept_local)
++
++        # keep every non-video token plus the selected video tokens
++        keep_mask = torch.ones(inputs_embeds.shape[1], dtype=torch.bool, device=device)
++        keep_mask[vid_pos] = False
++        keep_mask[vid_pos[kept_local]] = True
++
++        inputs_embeds = inputs_embeds[:, keep_mask, :]
++        position_ids = position_ids[:, :, keep_mask]  # guaranteed non-None (guarded above)
++        # delta = max_kept_position + 1 - kept_seq_len, keeps rope_deltas consistent
++        self.rope_deltas = (position_ids.max() + 1 - inputs_embeds.shape[1]).reshape(1, 1)
++        if attention_mask is not None:
++            attention_mask = attention_mask[:, keep_mask]
++        return inputs_embeds, position_ids, attention_mask
+ 
+     def get_rope_index(
+         self,
+@@ -535,6 +758,14 @@ class Qwen2_5_VLModel(Qwen2VLModel):
+                 mm_token_type_ids=mm_token_type_ids,
+             )
+ 
++        # Learned video-token gating: drop low-scoring video tokens before the LLM
++        # (only on the prefill, where pixel_values_videos and the merged
++        # video_embeds/video_mask are available).
++        if self.token_keep_ratio is not None and self.token_scorer is not None and pixel_values_videos is not None:
++            inputs_embeds, position_ids, attention_mask = self._gate_video_tokens(
++                inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
++            )
++
+         outputs = self.language_model(
+             input_ids=None,
+             position_ids=position_ids,
+@@ -562,6 +793,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2VLForConditionalGeneration):
+     # Reference: fix gemma3 grad acc #37208
+     accepts_loss_kwargs = False
+ 
++    def load_token_scorer(self, *args, **kwargs):
++        """Attach a trained token scorer and enable video-token gating (delegates
++        to :meth:`Qwen2_5_VLModel.load_token_scorer`)."""
++        self.model.load_token_scorer(*args, **kwargs)
++        return self
++
++    def disable_token_gating(self):
++        """Turn video-token gating off (delegates to the inner model)."""
++        self.model.disable_token_gating()
++        return self
++
+     def forward(
+         self,
+         input_ids: torch.LongTensor | None = None,

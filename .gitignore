@@ -44,3 +44,6 @@ runs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local clone of huggingface/transformers (changes tracked via patches/, not vendored)
+transformers/
