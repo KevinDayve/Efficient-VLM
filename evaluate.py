@@ -59,7 +59,7 @@ def _select(strat, scores, k, n_frames, n_video, device, args):
 def run(args):
     common.set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     strategies = [s for s in args.strategies if s in GATING_STRATEGIES]
     unknown = [s for s in args.strategies if s not in GATING_STRATEGIES]
@@ -270,7 +270,9 @@ def parse_args():
     p.add_argument("--skip_self_test", action="store_true", help="skip the K=n_video plumbing check")
     p.add_argument("--self_test_atol", type=float, default=0.5,
                    help="fp16-realistic logit bound; the gate also requires the predicted option to match")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"],
+                   help="Compute dtype for the frozen VLM. Use bf16 for Qwen2.5-VL; fp16 overflows "
+                        "the vision tower and produces garbage. fp32 doubles memory.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_eval.json")
     return p.parse_args()

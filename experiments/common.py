@@ -58,11 +58,15 @@ def set_seed(seed: int = 42) -> None:
 # --------------------------------------------------------------------------- #
 # Model / processor
 # --------------------------------------------------------------------------- #
+_DTYPE_MAP = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
+
+
 def load_model_and_processor(
     model_name: str,
     fp16: bool = True,
     device_map: str = "auto",
     attn_implementation: str = "eager",
+    dtype: Optional[str] = None,
 ):
     """Load a frozen Qwen2.5-VL model + processor in eval mode.
 
@@ -70,12 +74,22 @@ def load_model_and_processor(
     module docstring. We do not change ``requires_grad`` because nothing here
     calls ``.backward()``, but the model is put in ``eval()`` so dropout/LN are
     deterministic.
+
+    Precision: pass ``dtype`` (``"bf16"``/``"fp16"``/``"fp32"``) to choose
+    explicitly -- bf16 is the right default on Ampere+ since Qwen2.5-VL's
+    activations overflow float16's range (the vision tower emits garbage / NaN
+    attention in fp16). The legacy ``fp16`` bool is kept for the experiment
+    scripts and only consulted when ``dtype`` is None (True -> fp16, False -> fp32).
     """
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
+    if dtype is not None:
+        torch_dtype = _DTYPE_MAP[dtype]
+    else:
+        torch_dtype = torch.float16 if fp16 else torch.float32
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_name,
-        torch_dtype=torch.float16 if fp16 else torch.float32,
+        torch_dtype=torch_dtype,
         device_map=device_map,
         attn_implementation=attn_implementation,
     )
