@@ -39,3 +39,20 @@ def bce_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         Scalar mean BCE loss over the batch.
     """
     return F.binary_cross_entropy_with_logits(logits, targets)
+
+
+def info_nce(video_emb: torch.Tensor, lang_emb: torch.Tensor, tau: float = 0.07) -> torch.Tensor:
+    """Symmetric (CLIP-style) InfoNCE over a batch of paired video/language embeddings.
+
+    ``video_emb`` and ``lang_emb`` are both (B, d) and assumed L2-normalised. Pairs
+    are positive on the diagonal (video i <-> language i); all other in-batch pairs
+    are negatives. Averages the video->language and language->video cross-entropies:
+
+        L = 1/2 [ CE(V Lᵀ / tau, diag) + CE(L Vᵀ / tau, diag) ]
+
+    A larger batch gives more negatives, which is why this lives in the cached,
+    batched trainer rather than the batch-size-1 online loop. Returns a scalar.
+    """
+    logits = (video_emb @ lang_emb.t()) / tau          # (B, B)
+    labels = torch.arange(logits.size(0), device=logits.device)
+    return 0.5 * (F.cross_entropy(logits, labels) + F.cross_entropy(logits.t(), labels))

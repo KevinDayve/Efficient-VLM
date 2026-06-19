@@ -51,6 +51,10 @@ class AttentionExtractor(nn.Module):
         self.query_mask = query_mask
         # Per-layer attention weights captured during the most recent forward.
         self._captured: dict = {}
+        # Per-layer pooled language hidden states (B, D), captured only when
+        # truncated_forward(capture_hidden=True). These feed the contrastive
+        # language embedding; the attention path above is unaffected when off.
+        self._captured_hidden: dict = {}
 
     # ------------------------------------------------------------------ #
     # Truncated capture
@@ -105,6 +109,38 @@ class AttentionExtractor(nn.Module):
         block = attn[:, :, rows][:, :, :, v]          # (B, heads, |rows|, n_video)
         return block.mean(dim=1).mean(dim=1).float()  # (B, n_video)
 
+    def _query_rows(self, S: int, device):
+        """Row index/mask selecting the language query positions (post-video tokens,
+        specials excluded). Shared by the attention reducer and the hidden-state
+        pooler. Returns a bool mask or a 1-D index tensor, or ``None`` if empty."""
+        if self.query_mask is not None:
+            rows = self.query_mask.to(device)
+            return rows if bool(rows.any()) else None
+        vid = self.video_positions
+        if vid is None or vid.numel() == 0:
+            return None
+        end = int(vid.flatten().max().item()) + 1
+        rows = torch.arange(end, S, device=device)
+        return rows if rows.numel() > 0 else None
+
+    def _make_hidden_hook(self, layer_idx: int):
+        def hook(module, inputs, output):
+            # A decoder layer returns (hidden_states, ...) -- output[0] is (B, S, D).
+            hidden = output[0] if isinstance(output, (tuple, list)) else output
+            pooled = self._reduce_hidden(hidden.detach())
+            if pooled is not None:
+                self._captured_hidden[layer_idx] = pooled
+        return hook
+
+    def _reduce_hidden(self, hidden: torch.Tensor) -> Optional[torch.Tensor]:
+        """Mean-pool one layer's hidden states ``(B, S, D)`` over the language query
+        rows into a per-sample language embedding ``(B, D)``. Returns ``None`` when
+        there are no valid query rows (handled like a skipped layer)."""
+        rows = self._query_rows(hidden.shape[1], hidden.device)
+        if rows is None:
+            return None
+        return hidden[:, rows].mean(dim=1).float()  # (B, D)
+
     def _make_stop_hook(self):
         def hook(module, inputs, output):
             raise _StopForward
@@ -119,7 +155,19 @@ class AttentionExtractor(nn.Module):
         n = max(self._captured) + 1
         return [self._captured.get(i) for i in range(n)]
 
-    def truncated_forward(self, **forward_kwargs) -> Optional[list]:
+    def lang_features(self) -> Optional[torch.Tensor]:
+        """Stack the captured per-layer pooled language embeddings into
+        ``(B, n_layers, D)``, ordered by ``sorted(self.Layers)`` -- the language
+        side of the contrastive pair. Returns ``None`` if nothing was captured
+        (e.g. ``capture_hidden`` was not set, or there were no query rows)."""
+        if not self._captured_hidden:
+            return None
+        ordered = [self._captured_hidden[L] for L in sorted(self.Layers) if L in self._captured_hidden]
+        if not ordered:
+            return None
+        return torch.stack(ordered, dim=1)  # (B, n_layers, D)
+
+    def truncated_forward(self, capture_hidden: bool = False, **forward_kwargs) -> Optional[list]:
         """Run the VLM forward but abort right after ``max(Layers)``.
 
         Captures attention at ``self.Layers`` via hooks, reducing each layer to a
@@ -127,13 +175,22 @@ class AttentionExtractor(nn.Module):
         never retained), and returns them as a layer-indexed list. ``forward_kwargs``
         must include ``output_attentions=True`` so the eager attention modules emit
         weights.
+
+        When ``capture_hidden=True``, also pools each layer's language hidden states
+        into ``(B, D)`` (read via :meth:`lang_features`), for the contrastive term.
+        The hidden hook on a decoder layer is registered *before* the stop hook on
+        the same (last) layer, so the last layer's hidden state is captured before
+        the forward aborts.
         """
         self._captured = {}
+        self._captured_hidden = {}
         layers = self._decoder_layers()
         last = max(self.Layers)
         hooks = []
         for L in self.Layers:
             hooks.append(layers[L].self_attn.register_forward_hook(self._make_capture_hook(L)))
+            if capture_hidden:
+                hooks.append(layers[L].register_forward_hook(self._make_hidden_hook(L)))
         # Fires after the last needed decoder layer completes -> stop the forward.
         hooks.append(layers[last].register_forward_hook(self._make_stop_hook()))
         try:
