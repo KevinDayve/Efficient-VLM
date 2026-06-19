@@ -21,7 +21,13 @@ real B>1 batches from the cache; the online loop is effectively batch-size-1).
 Output layout (out_dir):
     meta.json              cache key: model, layers, max_frames, max_pixels, dtype
     manifest.jsonl         one line per sample: {path, n_video, t, n_per_frame, ...}
-    samples/000000.pt      per-sample dict (vision_feats, teacher_raw, t, ...)
+    samples/<key>.pt       per-sample dict (vision_feats, teacher_raw, t, ...)
+
+Sample files are named by a content hash of (video, question) rather than a running
+counter, so re-running the script resumes: any sample whose .pt already exists is
+skipped without touching the GPU. --limit counts toward the *total* cached, so a run
+that died at 120/200 finishes the remaining 80 on the next invocation. Pass
+--overwrite to ignore the existing cache and recompute everything.
 
 Each sample also stores ``lang_feat`` (n_layers, D): the pooled layer-12..16 language
 hidden states (mean over the language query rows), the language side of the
@@ -30,6 +36,7 @@ the language embedding dim -- both live in the same LLM token space.
 """
 import os
 import json
+import hashlib
 import argparse
 
 import torch
@@ -58,6 +65,13 @@ def prompt_meta(prompt) -> dict:
             elif item.get("type") == "text" and question is None:
                 question = item.get("text")
     return {"video": video_path, "question": question}
+
+
+def sample_key(meta_dict) -> str:
+    """Stable content hash of (video, question) used as the cache filename, so a
+    given sample maps to the same .pt across runs and can be skipped on resume."""
+    raw = json.dumps([meta_dict.get("video"), meta_dict.get("question")], sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def build_dataset(args):
@@ -102,17 +116,50 @@ def cache(args):
         "schema": 2,
         "has_lang": True,
     }
-    with open(os.path.join(args.out_dir, "meta.json"), "w") as fh:
+    meta_path = os.path.join(args.out_dir, "meta.json")
+    # Guard: resuming into a cache built with different settings would silently mix
+    # incompatible samples. Refuse unless the user explicitly asks to overwrite.
+    if os.path.exists(meta_path) and not args.overwrite:
+        with open(meta_path) as fh:
+            old_meta = json.load(fh)
+        if old_meta != meta:
+            raise SystemExit(
+                f"Existing cache meta in {args.out_dir} differs from this run's settings:\n"
+                f"  existing: {old_meta}\n  requested: {meta}\n"
+                "Pass --overwrite to rebuild, or point --out_dir at a fresh directory."
+            )
+    with open(meta_path, "w") as fh:
         json.dump(meta, fh, indent=2)
 
-    dataset = build_dataset(args)
     manifest_path = os.path.join(args.out_dir, "manifest.jsonl")
-    written, skipped = 0, 0
+    # Resume: keep manifest entries whose .pt still exists; these count toward --limit
+    # and let us skip recomputing those samples. --overwrite ignores the old cache.
+    existing = {}
+    if os.path.exists(manifest_path) and not args.overwrite:
+        with open(manifest_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if os.path.exists(os.path.join(args.out_dir, rec["path"])):
+                    existing[rec["path"]] = rec
+        print(f"Resuming: {len(existing)} samples already cached in {args.out_dir}.")
+
+    dataset = build_dataset(args)
+    written, skipped = len(existing), 0
     with open(manifest_path, "w") as manifest:
+        for rec in existing.values():  # replay valid prior entries, then append new ones
+            manifest.write(json.dumps(rec) + "\n")
+        manifest.flush()
         for i, sample in enumerate(dataset):
             if args.limit and written >= args.limit:
                 break
             prompt = sample["prompt"]
+            meta_d = prompt_meta(prompt)
+            rel = os.path.join("samples", f"{sample_key(meta_d)}.pt")
+            if rel in existing:
+                continue  # already cached on a previous run
             text = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=False)
             image_inputs, video_inputs = process_vision_info(prompt)
             inputs = processor(text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt")
@@ -155,14 +202,13 @@ def cache(args):
             t = int(video_grid_thw[0][0].item())
             n_per_frame = n_video // t if t > 0 else n_video
 
-            rel = os.path.join("samples", f"{written:06d}.pt")
             record = {
                 "vision_feats": vision_feats,
                 "teacher_raw": teacher_raw,
                 "lang_feat": lang_feat,
                 "t": t,
                 "n_per_frame": n_per_frame,
-                **prompt_meta(prompt),
+                **meta_d,
             }
             torch.save(record, os.path.join(args.out_dir, rel))
             manifest.write(json.dumps({
@@ -170,7 +216,7 @@ def cache(args):
                 "n_video": n_video,
                 "t": t,
                 "n_per_frame": n_per_frame,
-                **prompt_meta(prompt),
+                **meta_d,
             }) + "\n")
             manifest.flush()
             written += 1
@@ -191,7 +237,8 @@ def parse_args():
     p.add_argument("--max_frames", type=int, default=8)
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
-    p.add_argument("--limit", type=int, default=None, help="Cache at most this many samples (for smoke tests).")
+    p.add_argument("--limit", type=int, default=None, help="Cache at most this many samples total (counts already-cached samples on resume).")
+    p.add_argument("--overwrite", action="store_true", help="Ignore any existing cache and recompute every sample from scratch.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--log_every", type=int, default=50)
     return p.parse_args()
