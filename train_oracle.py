@@ -129,7 +129,7 @@ def train(args):
             out = model(inputs_embeds=input_embeds, position_ids=position_ids, attention_mask=attention, use_cache=False)
             L_answer = F.log_softmax(out.logits[0, -1, :].float(), dim=-1)[gt_token]
             if visual_feats.grad is not None:
-                ve.grad = None
+                visual_feats.grad = None
             L_answer.backward()
             gradient = visual_feats.float()
             oracle = F.relu((g * visual_feats.detach().float()).sum(dim=-1)
