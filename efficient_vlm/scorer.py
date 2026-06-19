@@ -8,21 +8,24 @@ class Scorer(nn.Module):
     """
     A small MLP that outputs a score for a feature vector R^{T x N x D}
     """
-    def __init__(self, input_dim: int, hidden_dim: int = 256):
+    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.1):
         """
         Initialise the scorer
         Args:
             input_dim: The dimension of the input feature vector (example for VIT it would be 768)
             hidden_dim: The dimennsion of the hidden layer. Default is 256
+            dropout: the dropout rate for the network (which node to drop). Default is 0.1
         """
         super().__init__()
         self.input_dim = input_dim
         self.inputNorm = nn.LayerNorm(input_dim)
-        # Single-hidden-layer MLP per the paper (Eq. 3):
-        # s_hat = W2 GELU(W1 LN(f) + b1) + b2.
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout)
         )
         self.head = nn.Linear(hidden_dim, 1)
         self._init_weights()
