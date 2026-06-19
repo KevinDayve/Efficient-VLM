@@ -5,6 +5,7 @@ import argparse
 import warnings
 from typing import List
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.stats import spearmanr
@@ -132,7 +133,7 @@ def train(args):
                 visual_feats.grad = None
             L_answer.backward()
             gradient = visual_feats.float()
-            oracle = F.relu((g * visual_feats.detach().float()).sum(dim=-1)
+            oracle = F.relu((gradient * visual_feats.detach().float()).sum(dim=-1))
             oracle_min, oracle_max = oracle.min(), oracle.max()
             oracle_target = ((oracle_min - oracle_max) / (oracle_max - oracle_min + 1e-8)).detach()
             features = visual_feats.detach().float()
@@ -143,12 +144,12 @@ def train(args):
                 scorer.train()
                 optimiser = torch.optim.AdamW(scorer.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.max_steps, eta_min=args.learning_rate*0.1)
-                print(f"Built scorer with input dim: {feats.shape[-1]} and hidden dim: {args.hidden_dim}")
-                logits = scorer(feats.unsqueeze(0))[0]
+                print(f"Built scorer with input dim: {features.shape[-1]} and hidden dim: {args.hidden_dim}")
+                logits = scorer(features.unsqueeze(0))[0]
                 loss = F.binary_cross_entropy_with_logits(logits, oracle_target)
                 optimiser.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm(scorer.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(scorer.parameters(), max_norm=1.0)
                 optimiser.step()
                 scheduler.step()
                 cumulativeLoss += loss.item()
@@ -158,17 +159,17 @@ def train(args):
                     rho = spearmanr(logits.detach().cpu().numpy(), oracle_target.detach().cpu().numpy()).statistic
                     spearmanHist.append(rho if rho == rho else 0.0)
                     if oracle.numel() >= 50:
-                        xiHist.append(einmahlHann(orachle.detach()))
+                        xiHist.append(einmahlHaan(oracle.detach()))
                 step += 1
                 if step % args.log_interval == 0:
                     average_loss = cumulativeLoss / args.log_interval
-                    message = (f"step {step}/{args.max_steps} | BCE {avg_loss:.4f} | "
+                    message = (f"step {step}/{args.max_steps} | BCE {average_loss:.4f} | "
                        f"rho {np.mean(spearmanHist[-args.log_interval:]):.3f} | "
                        f"recall@25% {np.mean(recallHist[-args.log_interval:]):.3f} | "
                        f"oracle xi {np.median(xiHist):.3f} | lr {scheduler.get_last_lr()[0]:.2e}")
                     print(message)
                     if run is not None:
-                        run.log({"train/bce": average_loss, "train/sperman": float(np.mean(rhoHist[-args.log_interval:])), "train/recall@25": float(np.mean(recallHist[-args.log_interval:])), "train/lr": scheduler.get_last_lr()[0]}, step=step)
+                        run.log({"train/bce": average_loss, "train/sperman": float(np.mean(spearmanHist[-args.log_interval:])), "train/recall@25": float(np.mean(recallHist[-args.log_interval:])), "train/lr": scheduler.get_last_lr()[0]}, step=step)
                     cumulativeLoss = 0.0
                 if step % args.save_every == 0:
                     save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, loss.item())
