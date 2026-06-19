@@ -167,6 +167,11 @@ def main():
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-7B-Instruct")
     p.add_argument("--scorer_ckpt", default="checkpoints/scorer_best.pt")
     p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.5, 0.75])
+    p.add_argument("--baselines", nargs="*", default=["random", "uniform"],
+                   choices=["random", "uniform"],
+                   help="Content-free selection baselines to run at each rho (same token "
+                        "budget as the scorer). Pass empty to skip, e.g. --baselines.")
+    p.add_argument("--seed", type=int, default=0, help="Seed for the random-selection baseline.")
     p.add_argument("--hidden_dim", type=int, default=256)
     p.add_argument("--k_min", type=int, default=1)
     p.add_argument("--temp", type=float, default=1.0)
@@ -184,6 +189,7 @@ def main():
     if unknown:
         raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
 
+    torch.manual_seed(args.seed)  # reproducible "random" selection baseline
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_name, torch_dtype=dtype, device_map="auto", attn_implementation=args.attn).eval()
@@ -191,11 +197,17 @@ def main():
     model.load_token_scorer(args.scorer_ckpt, keep_ratio=args.rhos[0], hidden_dim=args.hidden_dim,
                             k_min=args.k_min, temp=args.temp, beta_max=args.beta_max)
 
-    settings = ([("full", None)] if not args.no_full else []) + [(f"rho={r}", r) for r in args.rhos]
+    # (column name, rho, selection mode). The learned scorer plus, at the same
+    # budget, any content-free baselines requested via --baselines.
+    settings = [("full", None, None)] if not args.no_full else []
+    for r in args.rhos:
+        settings.append((f"rho={r}", r, "scorer"))
+        for b in args.baselines:
+            settings.append((f"{b[:4]}@{r}", r, b))   # e.g. rand@0.25, unif@0.25
     # per-task and aggregate accuracy
-    correct = {t: {name: 0 for name, _ in settings} for t in tasks}
+    correct = {t: {name: 0 for name, _, _ in settings} for t in tasks}
     seen = {t: 0 for t in tasks}
-    kept_vid = {name: 0 for name, _ in settings}
+    kept_vid = {name: 0 for name, _, _ in settings}
     vid_total = 0
     text_total = 0
     n = 0
@@ -224,11 +236,12 @@ def main():
             n_video, n_text = video_text_counts(model, inputs)
             vid_total += n_video
             text_total += n_text
-            for name, rho in settings:
+            for name, rho, mode in settings:
                 if rho is None:
                     model.disable_token_gating()
                 else:
                     model.model.token_keep_ratio = rho
+                    model.model.token_selection_mode = mode
                 correct[task][name] += int(predict(model, inputs, letter_ids) == gt_idx)
                 kept_vid[name] += kept_video_count(model, inputs, rho)
             seen[task] += 1
@@ -242,7 +255,7 @@ def main():
           f"(avg video tokens/clip = {vid_total / n:.0f}, avg text tokens = {text_avg:.0f})\n")
 
     # per-task accuracy table (one column per setting)
-    col = [name for name, _ in settings]
+    col = [name for name, _, _ in settings]
     print(f"{'task':<26}{'n':>5}" + "".join(f"{c:>10}" for c in col))
     print("-" * (31 + 10 * len(col)))
     for task in tasks:
@@ -260,7 +273,7 @@ def main():
 
     print(f"\n{'setting':<10}{'vid%':>8}{'vid_tok':>9}{'text_tok':>10}")
     print("-" * 37)
-    for name, _ in settings:
+    for name, _, _ in settings:
         vid_pct = kept_vid[name] / vid_total * 100 if vid_total else 0.0
         print(f"{name:<10}{vid_pct:>7.1f}%{kept_vid[name] / n:>9.0f}{text_avg:>10.0f}")
 

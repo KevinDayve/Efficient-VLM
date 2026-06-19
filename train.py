@@ -1,5 +1,5 @@
 from efficient_vlm.attention_extractor import AttentionExtractor
-from efficient_vlm.loss import listmle_loss
+from efficient_vlm.loss import listmle_loss, bce_loss
 from efficient_vlm.scorer import Scorer
 from efficient_vlm.utils import einmahlHaan, topk_recall, ndcg_at_k, select_pareto_stratified
 import os
@@ -36,6 +36,13 @@ def get_patch_embeds(model: Qwen2_5_VLForConditionalGeneration, pixel_values: to
 
 def count_video_tokens(input_ids: torch.Tensor, video_token_id: int) -> int:
     return (input_ids == video_token_id).sum().item()
+
+
+def compute_loss(logits, targets, args):
+    """Dispatch the configured training objective (see --loss)."""
+    if args.loss == "bce":
+        return bce_loss(logits, targets)
+    return listmle_loss(logits, targets, top_m=args.top_m)
 
 
 def save_checkpoint(scorer: nn.Module, optimiser: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, step: int, checkpoint_dir: str, loss: float, tag: str = None):
@@ -175,7 +182,7 @@ def run_validation(model, processor, scorer, attn_extractor, val_dataset, args,
         if targets is None:
             continue
         targets = targets.to(device)
-        losses.append(listmle_loss(logits, targets, top_m=args.top_m).item())
+        losses.append(compute_loss(logits, targets, args).item())
         pred, teach = logits[0].float(), targets[0].float()
         rho = spearmanr(pred.cpu().numpy(), teach.cpu().numpy()).statistic
         if rho == rho:  # skip NaN (constant inputs)
@@ -365,7 +372,7 @@ def train(args):
             targets = targets.to(device)
             # Scale by grad_accum so the accumulated gradient is the *mean* over
             # the effective batch, matching a single larger-batch update.
-            loss = listmle_loss(logits, targets, top_m=args.top_m) / args.grad_accum
+            loss = compute_loss(logits, targets, args) / args.grad_accum
             loss.backward()
             micro += 1
             window_loss += loss.item() * args.grad_accum   # track un-scaled loss
@@ -458,6 +465,7 @@ def parse_args():
     arguments.add_argument("--log_interval", type=int, default=500, help='The interval (in steps) at which to log the training loss.')
     arguments.add_argument("--save_every", type=int, default=1000, help='The interval (in steps) at which to save model checkpoints.')
     arguments.add_argument("--top_m", type=int, default=None, help="The listmle loss to run over top m tokens to avoid noisy gradients. Defaults to `None`.")
+    arguments.add_argument("--loss", choices=["listmle", "bce"], default="listmle", help="Training objective. 'listmle' (default) is the listwise ranking loss; 'bce' is soft-label binary cross-entropy on the [0,1] targets, matching LITE (arXiv:2411.13626). 'bce' ignores --top_m.")
     arguments.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16", help="Compute dtype for the frozen VLM. bf16 (default) is recommended on Ampere+ (A10G/A100/H100); fp16 is only for pre-Ampere GPUs (T4/V100) and risks NaN attention on Qwen2.5-VL; fp32 for max precision at 2x memory.")
     arguments.add_argument("--seed", type=int, default=42, help="Seed for reproducibility.")
     arguments.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints.")
