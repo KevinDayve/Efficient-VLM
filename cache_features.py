@@ -145,9 +145,12 @@ def cache(args):
                 skipped += 1
                 continue
 
-            vision_feats = patch_embeds.squeeze(0).to(torch.float16).cpu()  # (n_video, D)
-            teacher_raw = teacher_raw.squeeze(0).float().cpu()              # (n_video,)
-            lang_feat = lang_feat.squeeze(0).to(torch.float16).cpu()        # (n_layers, D)
+            # detach: get_patch_embeds runs the VLM merger outside no_grad, so the
+            # features track grad. Detaching keeps the cache free of grad state
+            # (non-leaf requires_grad tensors can't be pickled by DataLoader workers).
+            vision_feats = patch_embeds.squeeze(0).detach().to(torch.float16).cpu()  # (n_video, D)
+            teacher_raw = teacher_raw.squeeze(0).detach().float().cpu()              # (n_video,)
+            lang_feat = lang_feat.squeeze(0).detach().to(torch.float16).cpu()        # (n_layers, D)
             n_video = vision_feats.shape[0]
             t = int(video_grid_thw[0][0].item())
             n_per_frame = n_video // t if t > 0 else n_video

@@ -47,11 +47,15 @@ class CachedFeatureDataset(Dataset):
         blob = torch.load(os.path.join(self.cache_dir, rec["path"]), map_location="cpu")
         lang = blob.get("lang_feat")
         return {
-            # Cast features to fp32 here: the scorer runs in fp32 (stable LayerNorm/
-            # AdamW), matching train.py which casts patch_embeds.float() before scoring.
-            "vision_feats": blob["vision_feats"].float(),   # (n_video, D)
-            "teacher_raw": blob["teacher_raw"].float(),      # (n_video,)
-            "lang_feat": lang.float() if lang is not None else None,  # (n_layers, D) or None
+            # detach(): cached vision feats can carry requires_grad (the VLM merger
+            # ran outside no_grad at cache time), which is a non-leaf tensor that
+            # can't be pickled across DataLoader workers ("Cowardly refusing to
+            # serialize non-leaf tensor which requires_grad"). The scorer's frozen
+            # input must not require grad anyway. Cast to fp32 to match train.py,
+            # which casts patch_embeds.float() before scoring.
+            "vision_feats": blob["vision_feats"].detach().float(),   # (n_video, D)
+            "teacher_raw": blob["teacher_raw"].detach().float(),      # (n_video,)
+            "lang_feat": lang.detach().float() if lang is not None else None,  # (n_layers, D) or None
             "t": int(blob["t"]),
             "n_per_frame": int(blob["n_per_frame"]),
             "video": rec.get("video"),
