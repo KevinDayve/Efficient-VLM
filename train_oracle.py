@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import random
 import argparse
@@ -31,12 +32,45 @@ def make_prompt(record, video_root, max_frames, max_pixels=None):
     return [{"role": "user", "content": content}]
 
 def options_and_answer(record):
-    choices = record.get("all_choices") or sorted(record.get("index2ans", {}).keys())
+    """Extract the option letters and the correct-answer index from a record.
+
+    Handles both NeXTVideo jsonl layouts:
+      * explicit fields -- top-level ``all_choices``/``index2ans`` + ``gt`` letter
+        (the val format, user-only messages); and
+      * chat-encoded -- options as 'A. ...', 'B. ...' lines in the user turn's
+        text and the answer letter in the assistant turn (the train format).
+    Returns ``(choices, correct_idx)`` where ``choices`` is the list of option
+    letters and ``choices[correct_idx]`` is the answer letter, or ``(None, None)``
+    if the record is unusable.
+    """
+    # Path 1: explicit top-level fields (val format).
+    choices = record.get("all_choices") or sorted((record.get("index2ans") or {}).keys())
     gt = record.get("gt")
-    if not choices or gt is None:
+    if choices and gt is not None:
+        gt = gt.strip().upper()
+        gt = gt[0] if gt else ''
+        if gt in choices:
+            return choices, choices.index(gt)
         return None, None
-    gt = gt.strip().upper()
-    if gt not in choices:
+
+    # Path 2: parse the chat messages (train format).
+    user_text, answer = None, None
+    for msg in record.get("messages", []):
+        role = msg.get("role")
+        for item in msg.get("content", []):
+            if item.get("type") != "text" or not item.get("text"):
+                continue
+            if role == "user":
+                user_text = item["text"]
+            elif role == "assistant":
+                answer = item["text"]
+    if not user_text or not answer:
+        return None, None
+    # Option letters that appear as their own "A. ...", "B. ..." lines.
+    choices = re.findall(r'^\s*([A-Z])\.\s', user_text, flags=re.MULTILINE)
+    gt = answer.strip().upper()
+    gt = gt[0] if gt else ''   # answer may be a bare letter ('D') or 'D. two'
+    if not choices or gt not in choices:
         return None, None
     return choices, choices.index(gt)
 
@@ -178,7 +212,11 @@ def train(args):
         "fp16": torch.float16,
         "fp32": torch.float32
     }[args.dtype]
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_name, torch_dtype=dtype, device_map='auto', attn_implementation='eager')
+    # SDPA (PyTorch's fused attention) instead of eager: the gradient oracle only
+    # needs a forward+backward on the answer log-prob, never the attention weights,
+    # so we don't pay eager's O(S^2) attention-matrix materialisation. Much faster
+    # and lower memory on long video-token sequences.
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_name, torch_dtype=dtype, device_map='auto', attn_implementation='sdpa')
     model.eval()
     model.requires_grad_(False)
     model.gradient_checkpointing_enable()
