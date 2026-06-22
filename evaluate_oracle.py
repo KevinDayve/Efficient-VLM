@@ -220,7 +220,7 @@ def run(args):
             print(f"skip record {i}: {e}")
             continue
         if sample is None:
-            continue
+            warnings.warn(f"[WARN] Skipping record {i}: {e} as it is None.")
 
         features = sample["features"]
         n_video = features.shape[0]
@@ -333,7 +333,7 @@ def parse_args():
     p.add_argument("--hidden_dim", type=int, default=512, help="Must match the trained scorer (train_oracle default 512).")
     p.add_argument("--data_file", required=True, help="Eval jsonl (NExT-QA format; same as train_oracle --val_file).")
     p.add_argument("--video_root", required=True)
-    p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.50, 0.75], help="retention ratios")
+    p.add_argument("--rhos", type=float, nargs="+", default=[0.01, 0.05, 0.10, 0.25], help="retention ratios")
     p.add_argument("--strategies", nargs="+", default=["ours", "uniform", "random"],
                    help=f"gating strategies to sweep: {list(STRATEGIES)} (full is always the baseline)")
     p.add_argument("--max_samples", type=int, default=None, help="Cap number of records evaluated.")
