@@ -7,6 +7,7 @@ from typing import List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from scipy.stats import spearmanr
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
@@ -58,17 +59,13 @@ def topk_overlap(pred, target, k):
     return len(tp & pp) / k
 
 
-def compute_oracle(model, processor, rec, video_token_id, device, args, video_root):
-    """Run the frozen VLM forward+backward to build the gradient-oracle target.
+def preprocess_sample(processor, rec, video_token_id, args, video_root):
+    """CPU-only preprocessing for one record: video decode + tokenisation.
 
-    Returns ``(features, oracle_target, oracle)`` where ``features`` are the
-    detached merged visual tokens (fp32, the scorer's input), ``oracle_target``
-    is the min-max normalised [0,1] saliency used as the BCE target, and
-    ``oracle`` is the raw relu saliency (for the EVT tail diagnostic). Returns
-    ``None`` when the sample is unusable (missing answer / no video tokens).
-
-    Note: this needs a backward pass through the (frozen) VLM, so callers must
-    NOT wrap it in ``torch.no_grad()`` -- only the scorer's own forward is.
+    This is the expensive, GPU-idle part (video decoding via qwen_vl_utils),
+    so it runs inside DataLoader worker processes. Returns a dict of CPU
+    tensors ready for the GPU pass, or ``None`` when the sample is unusable
+    (missing answer / no video tokens). Touches no CUDA, so it is fork-safe.
     """
     choices, correctIdx = options_and_answer(rec)
     if choices is None:
@@ -83,14 +80,75 @@ def compute_oracle(model, processor, rec, video_token_id, device, args, video_ro
         videos=video_inputs,
         return_tensors='pt'
     )
-    input_ids = inputs["input_ids"].to(device)
-    attention = inputs['attention_mask'].to(device)
-    video_pos = (input_ids[0] == video_token_id).nonzero(as_tuple=False).flatten()
-    if video_pos.numel() == 0:
+    if (inputs["input_ids"][0] == video_token_id).sum() == 0:
         warnings.warn("[Warning] found zero video tokens. Skipping")
         return None
-    video_grid_thw = inputs['video_grid_thw'].to(device)
-    pixels = inputs['pixel_values_videos'].to(device)
+    return {
+        "input_ids": inputs["input_ids"],
+        "attention_mask": inputs["attention_mask"],
+        "video_grid_thw": inputs["video_grid_thw"],
+        "pixel_values_videos": inputs["pixel_values_videos"],
+        "gt_token": int(gt_token),
+    }
+
+
+class OracleDataset(Dataset):
+    """Wraps the record list so DataLoader workers run preprocess_sample()."""
+
+    def __init__(self, records, processor, video_token_id, args, video_root):
+        self.records = records
+        self.processor = processor
+        self.video_token_id = video_token_id
+        self.args = args
+        self.video_root = video_root
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        try:
+            return preprocess_sample(self.processor, self.records[idx],
+                                     self.video_token_id, self.args, self.video_root)
+        except Exception as e:  # a corrupt clip shouldn't kill the run
+            warnings.warn(f"[Warning] preprocessing failed for idx {idx}: {e}")
+            return None
+
+
+def _collate_single(batch):
+    """batch_size is always 1; pass the single (possibly None) sample through."""
+    return batch[0]
+
+
+def _make_loader(dataset, shuffle, args, generator=None):
+    kw = dict(batch_size=1, shuffle=shuffle, num_workers=args.num_workers,
+              collate_fn=_collate_single, pin_memory=True)
+    if args.num_workers > 0:
+        kw["persistent_workers"] = True
+        kw["prefetch_factor"] = args.prefetch_factor
+    if generator is not None:
+        kw["generator"] = generator
+    return DataLoader(dataset, **kw)
+
+
+def compute_oracle(model, sample, video_token_id, device, args):
+    """Run the frozen VLM forward+backward to build the gradient-oracle target.
+
+    Takes a preprocessed ``sample`` dict (from preprocess_sample / the
+    DataLoader) and returns ``(features, oracle_target, oracle)`` where
+    ``features`` are the detached merged visual tokens (fp32, the scorer's
+    input), ``oracle_target`` is the min-max normalised [0,1] saliency used as
+    the BCE target, and ``oracle`` is the raw relu saliency (for the EVT tail
+    diagnostic).
+
+    Note: this needs a backward pass through the (frozen) VLM, so callers must
+    NOT wrap it in ``torch.no_grad()`` -- only the scorer's own forward is.
+    """
+    input_ids = sample["input_ids"].to(device)
+    attention = sample["attention_mask"].to(device)
+    video_grid_thw = sample["video_grid_thw"].to(device)
+    pixels = sample["pixel_values_videos"].to(device)
+    gt_token = sample["gt_token"]
+    video_pos = (input_ids[0] == video_token_id).nonzero(as_tuple=False).flatten()
     with torch.no_grad():
         visual_feats = model.get_video_features(pixels, video_grid_thw).pooler_output
         visual_feats = torch.cat(visual_feats, dim=0).to(device)
@@ -123,8 +181,8 @@ def save_checkpoint(scorer, optimiser, scheduler, step, ckpt_dir, loss, tag=None
     print(f"  saved checkpoint -> {path} (loss {loss:.4f})")
 
 
-def run_validation(model, processor, scorer, val_records, args, device,
-                   video_token_id, max_samples, val_ratios, val_root):
+def run_validation(model, scorer, val_loader, args, device,
+                   video_token_id, max_samples, val_ratios):
     """Evaluate the scorer against the gradient oracle on a held-out set.
 
     Reports mean BCE, Spearman rho, and top-k recall (k = round(ratio*n_video))
@@ -137,10 +195,12 @@ def run_validation(model, processor, scorer, val_records, args, device,
     scorer.eval()
     losses, rhos, n = [], [], 0
     recalls = {r: [] for r in val_ratios}
-    for rec in val_records:
+    for sample in val_loader:
         if n >= max_samples:
             break
-        result = compute_oracle(model, processor, rec, video_token_id, device, args, val_root)
+        if sample is None:
+            continue
+        result = compute_oracle(model, sample, video_token_id, device, args)
         if result is None:
             continue
         features, oracle_target, _ = result
@@ -199,6 +259,20 @@ def train(args):
         random.Random(args.seed).shuffle(val_records)
         print(f"Loaded {len(val_records)} val records from {args.val_file}")
 
+    # DataLoaders run preprocess_sample() (video decode + tokenisation) in
+    # worker processes so the CPU decode of upcoming samples overlaps with the
+    # GPU forward/backward of the current one. batch_size is fixed at 1.
+    train_gen = torch.Generator().manual_seed(args.seed)
+    train_loader = _make_loader(
+        OracleDataset(records, processor, video_token_id, args, args.video_root),
+        shuffle=True, args=args, generator=train_gen)
+    val_loader = None
+    if val_records is not None:
+        val_root = args.val_video_root or args.video_root
+        val_loader = _make_loader(
+            OracleDataset(val_records, processor, video_token_id, args, val_root),
+            shuffle=False, args=args)
+
     scorer = None
     optimiser = None
     scheduler = None
@@ -221,10 +295,12 @@ def train(args):
     best_val_metric = float('-inf')     # for best-checkpoint tracking (--best_metric)
     spearmanHist, recallHist, xiHist = [], [], []
     while step < args.max_steps:
-        for rec in records:
+        for sample in train_loader:
             if step >= args.max_steps:
                 break
-            result = compute_oracle(model, processor, rec, video_token_id, device, args, args.video_root)
+            if sample is None:
+                continue
+            result = compute_oracle(model, sample, video_token_id, device, args)
             if result is None:
                 continue
             features, oracle_target, oracle = result
@@ -287,11 +363,10 @@ def train(args):
                 cumulativeLoss = 0.0
             if step % args.save_every == 0:
                 save_checkpoint(scorer, optimiser, scheduler, step, args.checkpoint_dir, last_loss)
-            if val_records is not None and step % args.val_interval == 0:
-                val_root = args.val_video_root or args.video_root
+            if val_loader is not None and step % args.val_interval == 0:
                 val_metrics, n_val = run_validation(
-                    model, processor, scorer, val_records, args, device,
-                    video_token_id, args.val_samples, args.val_ratios, val_root,
+                    model, scorer, val_loader, args, device,
+                    video_token_id, args.val_samples, args.val_ratios,
                 )
                 rec_str = ", ".join(
                     f"R@{int(round(r*100))} {val_metrics[f'val/recall@{int(round(r*100))}']:.3f}"
@@ -307,7 +382,7 @@ def train(args):
                     best_val_metric = mval
                     save_checkpoint(scorer, optimiser, scheduler, step,
                                     args.checkpoint_dir, val_metrics["val/bce"], tag="best")
-        random.Random(args.seed + step).shuffle(records)
+        # train_loader (shuffle=True) reshuffles automatically each epoch.
 
     # Final checkpoint, unless the last step already triggered a periodic save.
     if scorer is not None and step % args.save_every != 0:
@@ -328,6 +403,8 @@ def parse_args():
     p.add_argument("--val_ratios", type=float, nargs="+", default=[0.25, 0.5, 0.75], help="Retention ratios at which to report top-k recall during validation.")
     p.add_argument("--best_metric", type=str, default="recall@25", help="Validation metric for the best checkpoint, without the 'val/' prefix (e.g. recall@25, spearman_rho).")
     p.add_argument("--grad_accum", type=int, default=1, help="Accumulate gradients over this many samples per optimiser step (effective batch size).")
+    p.add_argument("--num_workers", type=int, default=4, help="DataLoader worker processes for video decode/preprocessing (0 = synchronous, on the main process).")
+    p.add_argument("--prefetch_factor", type=int, default=2, help="Batches each worker prefetches ahead (only used when --num_workers > 0).")
     p.add_argument("--hidden_dim", type=int, default=512)
     p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-2)
