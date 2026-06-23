@@ -70,6 +70,29 @@ theoretical `1 − K/(T·N)` saving. A one-time self-test asserts the gated forw
 with ρ = 1.0 reproduces the full-model logits before any number is trusted.
 VideoMME / MVBench need their field layout added to `experiments/common.py`.
 
+### FastV baseline (MVBench)
+
+`accuracy_mvbench_fastv.py` is a training-free FastV baseline
+([Chen et al., 2024](https://arxiv.org/abs/2403.06764)) for direct comparison with
+the learned scorer's `accuracy_mvbench.py` — same frames, prompt and option-letter
+readout. Unlike the scorer (which drops tokens *before* the LLM), FastV ranks visual
+tokens *inside* the LLM at layer `K` by the attention they receive from the last
+query position, keeping the top `ρ` fraction for layers `K+1…`. `ρ` is the keep
+ratio (FastV's `R = 1 − ρ`), so a given `ρ` is the same visual-token budget in both
+scripts.
+
+```bash
+python accuracy_mvbench_fastv.py \
+    --data_root ~/MVBench \
+    --model_name Qwen/Qwen2.5-VL-7B-Instruct \
+    --fastv_k 2 3 5 --rhos 0.25 0.5 0.75
+```
+
+It reports per-task / mean accuracy plus the theoretical FLOPs reduction (FastV
+Eq. 5). The mechanism is a reversible monkey-patch of the Qwen2.5-VL text-model
+forward (`efficient_vlm/fastv.py`) — no edits to the vendored `transformers` fork,
+and with `--fastv_k` unset the patched forward reproduces the full model exactly.
+
 ## Repository Structure
 
 ```
@@ -79,9 +102,12 @@ efficient_vlm/
 ├── attention_extractor.py # extracts language-to-video attention from frozen VLM
 ├── loss.py               # ListMLE ranking loss
 ├── utils.py              # Pareto tail-index budgeting + stratified selection
-└── gating.py             # deployable pre-projector token gating (M-RoPE preserved)
+├── gating.py             # deployable pre-projector token gating (M-RoPE preserved)
+└── fastv.py              # FastV in-LLM token pruning (training-free baseline)
 train.py                  # online training loop
 evaluate.py               # deployable gated-inference eval (accuracy + wallclock)
+accuracy_mvbench.py       # learned-scorer MC accuracy on MVBench
+accuracy_mvbench_fastv.py # FastV MC accuracy on MVBench (comparison baseline)
 configs/
 └── default.yaml          # default hyperparameters
 requirements.txt
