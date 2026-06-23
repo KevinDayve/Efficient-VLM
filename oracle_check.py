@@ -103,6 +103,27 @@ def build_full_positions(model, input_ids, video_positions, video_grid_thw, atte
     return pos  # (3,1,S)
 
 
+def oracle_from_letter(model, inputs_embeds, position_ids, attn, ve, letter_token_id):
+    """
+    One backward pass of log(p) at the answer psoition with respect to the merged tokens.
+    """
+    out = model(
+        inputs_embeds=inputs_embeds,
+        position_ids=position_ids,
+        attention_mask=attn,
+        use_cache=False,
+    )
+    logits_last = out[0, -1, :].float()
+    target = F.log_softmax(out[0, -1, :].float())
+    model.zero_grad(set_to_none=True)
+    if ve.grad is not None:
+        ve.grad = None
+    target.backward(retain_graph=False)
+    grad = ve.grad.float()
+    oracle = F.relu((g*ve.detach().float()).sum(dim=-1))
+    return oracle.detach(), logits_last.detach()
+
+
 @torch.no_grad()
 def score_answer(model, inputs_embeds, position_ids, attention_mask,
                  video_positions, keep_video, letter_token_ids):
@@ -172,19 +193,18 @@ def main(args):
         position_ids = build_full_positions(model, input_ids, video_positions,
                                             video_grid_thw, attn)
 
-        # ---- forward + backward to get the GradCAM oracle ----
-        out = model(inputs_embeds=inputs_embeds, position_ids=position_ids,
-                    attention_mask=attn, use_cache=False)
-        target = F.log_softmax(out.logits[0, -1, :].float(), dim=-1)[gt_token]
-        model.zero_grad(set_to_none=True)
-        if ve.grad is not None:
-            ve.grad = None
-        target.backward()
-        g = ve.grad.float()                              # (n_video, d)
-        oracle = F.relu((g * ve.detach().float()).sum(dim=-1))   # (n_video,) GradCAM
-        # min-max to [0,1]
-        omin, omax = oracle.min(), oracle.max()
-        oracle_n = (oracle - omin) / (omax - omin + 1e-8)
+        oracle, logits_last = oracle_from_letter(
+            model, inputs_embeds, position_ids, attn, ve, gt_token
+        )
+        option_logits = torch.tensor([logits_last[t].item() for t in letter_token_ids])
+        pred_idx = int(option_logits.argmax().item())
+        pred_token = letter_token_ids[pred_idx]
+        model_pred_correct += int(pred_idx == correct_idx)
+        self_matches_gold += int(pred_token == gt_token)
+        
+        self_oracle = oracle_from_letter(
+            model, inputs_embeds, position_ids, attn, ve, pred_token
+        )
 
         # ---- H4: tail index + shape ----
         if oracle.numel() >= 50:
@@ -195,10 +215,15 @@ def main(args):
 
         # ---- CEILING: oracle-arm vs uniform-arm downstream ----
         inputs_embeds_d = inputs_embeds.detach()
-        keep_oracle = select_by_scores(oracle.detach(), n_frames, k)
+        keep_oracle = select_by_scores(oracle, n_frames, k)
+        keep_self = select_by_scores(self_oracle, n_frames, k)
         keep_uniform = select_uniform(n_video, n_frames, k, device)
         lp_or = score_answer(model, inputs_embeds_d, position_ids, attn,
                             video_positions, keep_oracle, letter_token_ids)
+        
+        lp_self = score_answer(model, inputs_embeds_d, position_ids, attn, 
+                                video_positions, keep_self, letter_token_ids)
+
         lp_un = score_answer(model, inputs_embeds_d, position_ids, attn,
                             video_positions, keep_uniform, letter_token_ids)
         oracle_correct += int(lp_or.argmax().item() == correct_idx)
@@ -219,11 +244,15 @@ def main(args):
     print(f"  CEILING  oracle acc: {oracle_correct/total:.4f}   "
           f"uniform acc: {uniform_correct/total:.4f}   "
           f"gap: {(oracle_correct-uniform_correct)/total:+.4f}")
+    print(f"           self_oracle: {self_correct/total:.4f}   "
+          f"gap vs uniform {(self_correct-uniform_correct)/total:+.4f}")
     print("\n  Read:")
     print("   xi > ~0.15 + positive skew + high frac-zero -> Pareto-like (LITE transfers)")
     print("   xi ~ 0, low skew                            -> NOT Pareto (your bet)")
     print("   CEILING gap > 0  -> a token subset carries the answer; a scorer has something to chase")
     print("   CEILING gap ~ 0  -> even the cheating oracle ties uniform; direction is dead")
+    print("   self_oracle gap > 0  -> recoverable WITHOUT the label -> deployable method exists")
+    print("   self_oracle gap ~ 0  -> the label was doing the work; this branch is closed")
 
 
 def parse_args():
