@@ -2,25 +2,34 @@
 Gradient-oracle diagnostic for video-LLM token selection.
 =========================================================
 Tests whether the LITE oracle principle transfers from ViT action-recognition
-to a video-LLM, BEFORE training any scorer.
+to a video-LLM, BEFORE training any scorer -- and whether a LABEL-FREE
+"self-oracle" preserves the ceiling (the only branch left open after the
+feature-scorer was shown to fail: the oracle's signal lives in the gradient,
+not the features, so compute it directly at inference rather than predicting it).
 
-The oracle (GradCAM-style, LITE Eq. 2): for the correct answer letter, compute
-    g = d log p(answer) / d (merged video token)        # one backward pass
+Oracles (GradCAM-style, LITE Eq. 2):
+    g = d log p(letter) / d (merged video token)        # one backward pass
     value_i = ReLU( sum_d  g_{i,d} * activation_{i,d} )  # per-token saliency
-then min-max to [0,1]. This uses the TRUE label (privileged), so it is a
-ceiling, exactly as in LITE.
+  * TRUE-LABEL oracle: letter = gold answer. Privileged ceiling (uses the label).
+  * SELF oracle:       letter = model's OWN argmax prediction. Label-free, so it
+                       is computable at inference -- this is the deployable signal.
 
-Two checks, neither needs a trained scorer:
-  H4  -- tail index xi_hat of the oracle values (DEdH / einmahlHaan).
-         Compare to attention (+0.28, useless) and redundancy (-0.28, useful).
-         User's registered bet: NOT Pareto (xi <= ~0).
-  CEILING -- top-k-by-oracle vs uniform on answer accuracy. If the oracle
-         (which cheats) cannot beat uniform, the whole direction is dead.
+Checks (no trained scorer needed):
+  H4      -- tail index xi_hat of the true-label oracle (DEdH / einmahlHaan).
+  CEILING -- top-k-by-{oracle, self_oracle} vs uniform on answer accuracy.
+             oracle gap > 0       : a token subset carries the answer (privileged).
+             self_oracle gap > 0  : that subset is recoverable WITHOUT the label
+                                    -> a deployable training-free method exists.
+             self_oracle gap ~ 0  : the label was doing the work; branch closed.
 
-NOTE the mild circularity of the ceiling test: we differentiate log p(answer)
+The self-oracle's quality is bounded by how often the model's prediction is right
+(when pred == gold, self-oracle == true oracle). We log model accuracy so the
+self_oracle gap can be read against it.
+
+NOTE the mild circularity of the ceiling test: we differentiate log p(letter)
 and then keep the tokens that most raise it. That is the point of an oracle
-(upper bound, privileged label) and is what LITE does. Read it as "is there a
-small token subset that carries the answer at all", not as an achievable score.
+(upper bound), and is what LITE does. Read it as "is there a small token subset
+that carries the answer", not as an achievable score.
 
 Run (8 frames + grad checkpointing -- backward is memory-heavy, do not push frames):
     python oracle_check.py \
@@ -103,6 +112,38 @@ def build_full_positions(model, input_ids, video_positions, video_grid_thw, atte
     return pos  # (3,1,S)
 
 
+def oracle_from_letter(model, base_embeds, ve_feats, video_positions,
+                       position_ids, attn, letter_token_id):
+    """Build a FRESH ve leaf + inputs_embeds, run one forward, backward on
+    log p(letter_token_id), and return the GradCAM oracle ReLU(<g, ve>).
+
+    Each call owns its own graph and leaf, so calling this twice per sample
+    (gold letter, then predicted letter) gives two fully independent
+    forward->backward->free cycles: no retain_graph, no shared buffers, and
+    peak memory stays at a SINGLE backward (critical on tight GPUs).
+
+    base_embeds : (1,S,d) text embeddings with video slots present but to be
+                  overwritten (detached; carries no grad).
+    ve_feats    : (n_video, d) merged video features (detached); the source
+                  values for the fresh leaf.
+    """
+    ve = ve_feats.detach().clone().requires_grad_(True)      # fresh leaf
+    inputs_embeds = base_embeds.clone()
+    inputs_embeds[0, video_positions] = ve.to(inputs_embeds.dtype)
+
+    out = model(inputs_embeds=inputs_embeds, position_ids=position_ids,
+                attention_mask=attn, use_cache=False)
+    logits_last = out.logits[0, -1, :].float()
+    target = F.log_softmax(logits_last, dim=-1)[letter_token_id]
+    model.zero_grad(set_to_none=True)
+    target.backward()
+    g = ve.grad.float()
+    oracle = F.relu((g * ve.detach().float()).sum(dim=-1))
+    res = oracle.detach(), logits_last.detach()
+    del out, inputs_embeds, ve, g, target            # free this call's graph
+    return res
+
+
 @torch.no_grad()
 def score_answer(model, inputs_embeds, position_ids, attention_mask,
                  video_positions, keep_video, letter_token_ids):
@@ -136,7 +177,10 @@ def main(args):
     records = records[: args.limit]
 
     xi_hist, frac_zero_hist, skew_hist = [], [], []
-    oracle_correct = uniform_correct = total = 0
+    oracle_correct = self_correct = uniform_correct = 0
+    model_pred_correct = 0          # how often the full-model prediction is right
+    self_matches_gold = 0           # how often self-oracle letter == gold letter
+    total = 0
 
     for rec in records:
         choices, correct_idx = options_and_answer(rec)
@@ -161,69 +205,82 @@ def main(args):
         pix = inputs["pixel_values_videos"].to(device)
         k = max(n_frames, int(round(args.retention * n_video)))
 
-        # ---- merged video tokens, with grad ----
-        ve = model.get_video_features(pix, video_grid_thw).pooler_output
-        ve = torch.cat(ve, dim=0).to(device)            # (n_video, d)
-        ve = ve.detach().requires_grad_(True)
-
-        inputs_embeds = model.get_input_embeddings()(input_ids).clone()  # (1,S,d)
-        inputs_embeds[0, video_positions] = ve.to(inputs_embeds.dtype)
+        # ---- merged video tokens (detached source values for the leaves) ----
+        with torch.no_grad():
+            ve_feats = model.get_video_features(pix, video_grid_thw).pooler_output
+            ve_feats = torch.cat(ve_feats, dim=0).to(device)   # (n_video, d), detached
+            base_embeds = model.get_input_embeddings()(input_ids)  # (1,S,d), detached
+            base_embeds = base_embeds.clone()
+            base_embeds[0, video_positions] = ve_feats.to(base_embeds.dtype)
 
         position_ids = build_full_positions(model, input_ids, video_positions,
                                             video_grid_thw, attn)
 
-        # ---- forward + backward to get the GradCAM oracle ----
-        out = model(inputs_embeds=inputs_embeds, position_ids=position_ids,
-                    attention_mask=attn, use_cache=False)
-        target = F.log_softmax(out.logits[0, -1, :].float(), dim=-1)[gt_token]
-        model.zero_grad(set_to_none=True)
-        if ve.grad is not None:
-            ve.grad = None
-        target.backward()
-        g = ve.grad.float()                              # (n_video, d)
-        oracle = F.relu((g * ve.detach().float()).sum(dim=-1))   # (n_video,) GradCAM
-        # min-max to [0,1]
-        omin, omax = oracle.min(), oracle.max()
-        oracle_n = (oracle - omin) / (omax - omin + 1e-8)
+        # ---- TRUE-LABEL oracle (own forward+backward on gold letter) ----
+        oracle, logits_last = oracle_from_letter(
+            model, base_embeds, ve_feats, video_positions, position_ids, attn, gt_token)
 
-        # ---- H4: tail index + shape ----
+        # model's own predicted letter (restricted to the option letters) ----
+        opt_logits = torch.tensor([logits_last[t].item() for t in letter_token_ids])
+        pred_idx = int(opt_logits.argmax().item())
+        pred_token = letter_token_ids[pred_idx]
+        model_pred_correct += int(pred_idx == correct_idx)
+        self_matches_gold += int(pred_token == gt_token)
+
+        # ---- SELF oracle (own forward+backward on the model's predicted letter) ----
+        # Fully independent call: its own fresh leaf + graph, freed on return.
+        # Peak memory stays at one backward; no retain_graph needed.
+        self_oracle, _ = oracle_from_letter(
+            model, base_embeds, ve_feats, video_positions, position_ids, attn, pred_token)
+
+        # ---- H4: tail index + shape (true-label oracle) ----
         if oracle.numel() >= 50:
-            xi_hist.append(einmahlHaan(oracle.detach()))
+            xi_hist.append(einmahlHaan(oracle))
             frac_zero_hist.append((oracle <= 1e-8).float().mean().item())
-            o = oracle.detach()
+            o = oracle
             skew_hist.append((((o - o.mean()) / (o.std() + 1e-8)) ** 3).mean().item())
 
-        # ---- CEILING: oracle-arm vs uniform-arm downstream ----
-        inputs_embeds_d = inputs_embeds.detach()
-        keep_oracle = select_by_scores(oracle.detach(), n_frames, k)
+        # ---- CEILING: oracle / self_oracle / uniform downstream ----
+        # base_embeds is already detached (built under no_grad); score directly.
+        keep_oracle = select_by_scores(oracle, n_frames, k)
+        keep_self = select_by_scores(self_oracle, n_frames, k)
         keep_uniform = select_uniform(n_video, n_frames, k, device)
-        lp_or = score_answer(model, inputs_embeds_d, position_ids, attn,
+        lp_or = score_answer(model, base_embeds, position_ids, attn,
                             video_positions, keep_oracle, letter_token_ids)
-        lp_un = score_answer(model, inputs_embeds_d, position_ids, attn,
+        lp_self = score_answer(model, base_embeds, position_ids, attn,
+                            video_positions, keep_self, letter_token_ids)
+        lp_un = score_answer(model, base_embeds, position_ids, attn,
                             video_positions, keep_uniform, letter_token_ids)
         oracle_correct += int(lp_or.argmax().item() == correct_idx)
+        self_correct += int(lp_self.argmax().item() == correct_idx)
         uniform_correct += int(lp_un.argmax().item() == correct_idx)
         total += 1
 
-        del out, g, ve, inputs_embeds
+        del oracle, self_oracle, base_embeds, ve_feats
         if total % 10 == 0:
-            print(f"[{total}] xi_hat(oracle) median: {np.median(xi_hist):.4f} | "
-                  f"oracle acc: {oracle_correct/total:.3f} | uniform acc: {uniform_correct/total:.3f}")
+            print(f"[{total}] xi {np.median(xi_hist):.3f} | "
+                  f"oracle {oracle_correct/total:.3f} | self {self_correct/total:.3f} | "
+                  f"uniform {uniform_correct/total:.3f} | "
+                  f"model_acc {model_pred_correct/total:.3f}")
 
-    print("\n==== GRADIENT-ORACLE DIAGNOSTIC ====")
+    print("\n==== GRADIENT-ORACLE DIAGNOSTIC (with label-free self-oracle) ====")
     print(f"  samples: {total}")
     print(f"  H4  median xi_hat(oracle): {np.median(xi_hist):.4f}   "
           f"IQR [{np.percentile(xi_hist,25):.4f}, {np.percentile(xi_hist,75):.4f}]")
     print(f"      median frac at zero (post-ReLU): {np.median(frac_zero_hist):.3f}")
     print(f"      median skew: {np.median(skew_hist):.3f}")
-    print(f"  CEILING  oracle acc: {oracle_correct/total:.4f}   "
-          f"uniform acc: {uniform_correct/total:.4f}   "
-          f"gap: {(oracle_correct-uniform_correct)/total:+.4f}")
+    print(f"  model prediction accuracy (full):   {model_pred_correct/total:.4f}")
+    print(f"  self-oracle letter == gold letter:  {self_matches_gold/total:.4f}")
+    print(f"  CEILING  oracle:      {oracle_correct/total:.4f}   "
+          f"gap vs uniform {(oracle_correct-uniform_correct)/total:+.4f}")
+    print(f"           self_oracle: {self_correct/total:.4f}   "
+          f"gap vs uniform {(self_correct-uniform_correct)/total:+.4f}")
+    print(f"           uniform:     {uniform_correct/total:.4f}")
     print("\n  Read:")
-    print("   xi > ~0.15 + positive skew + high frac-zero -> Pareto-like (LITE transfers)")
-    print("   xi ~ 0, low skew                            -> NOT Pareto (your bet)")
-    print("   CEILING gap > 0  -> a token subset carries the answer; a scorer has something to chase")
-    print("   CEILING gap ~ 0  -> even the cheating oracle ties uniform; direction is dead")
+    print("   oracle gap > 0       -> a token subset carries the answer (privileged ceiling)")
+    print("   self_oracle gap > 0  -> recoverable WITHOUT the label -> deployable method exists")
+    print("   self_oracle gap ~ 0  -> the label was doing the work; this branch is closed")
+    print("   (self-oracle quality is bounded by model prediction accuracy above)")
 
 
 def parse_args():

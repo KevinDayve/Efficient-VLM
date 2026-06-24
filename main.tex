@@ -1,0 +1,471 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath, amssymb}
+\usepackage{tikz}
+% \usetikzlibrary{arrows.meta, positioning}
+\usepackage{graphicx} % Required for inserting images
+\usepackage[backend=biber, style=authoryear]{biblatex}
+\addbibresource{references.bib}
+
+\title{What does the VLM See?}
+\author{ML Team, Phronetic AI}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+    Video Large Language Models process all visual tokens uniformly across every transformer layer, regardless of their contribution to the final answer. The resulting inference cost scales quadratically with sequence length, making deployment under tight compute budgets challenging. Existing token reduction methods operate at one of two levels: frame selection before the model, or attention-based pruning inside the model. Frame-level methods such as VideoITG (\cite{wang2026videoitgmultimodalvideounderstanding}) and PEEK (\cite{steunou2026peekpickingessentialframes}) require either a text query at selection time or reference caption supervision, limiting their generality. Token-level methods such as  (\cite{huang2026kitokekernelbasedintervalawaretoken}, DyCoke (\cite{tao2025dycokedynamiccompressiontokens}, either operate without any language grounding (remaining agnostic to what the model actually needs), or derive supervision from task-specific reward signals that are expensive to compute.
+    We take a different position: the frozen VLM itself contains a reliable, model-native supervision signal for token importance, localisable to a small subset of intermediate layers. Recent mechanistic analysis of Video-LLMs (\cite{gou2025empiricalstudyvideollmsanswer}) demonstrates that language-to-video attention at layers 12–16 accounts for the disproportionate majority of visual information retrieval, while temporal and spatial self-attention between video tokens contributes comparatively little. Crucially, this signal is distinct from the CLS or BOS attention exploited by earlier pruning methods (such as FastV), which are known to exhibit positional bias and inflate importance scores for semantically empty tokens (\cite{myrzakhan2026sinkawarepruningdiffusionlanguage}). Language-to-video attention at critical intermediate layers does not exhibit this bias \cite{takezoe2026learnprunerrethinkingattentionbasedtoken}.
+    We train a lightweight MLP scorer (~1.0M parameters) online, supervised by language-to-video attention extracted from layers 12–16 of a frozen Qwen2.5-VL during forward passes on standard VideoQA data. The scorer reads the merged visual tokens the language model itself consumes and gates them before the decoder. To prevent temporal coverage collapse - where globally sorting top tokens concentrate in a single visual moment, we apply stratified selection across non-overlapping temporal bins ensuring the retained set spans the full video. Spatial and temporal identity of the token is preserved via RoPE, so the model always knows where and when each token originated from. Only the scorer is trained; VLM remains frozen.
+
+    Our contributions are: (1) a training signal derived from model-internal language-to-video attention at empirically validated critical layers, requiring no caption alignment, no reward model, and no architectural modification; (2) input-level token gating that prunes the merged visual tokens before the language-model decoder, saving full-depth LLM compute rather than pruning at an intermediate layer as attention-based methods do; (3) stratified temporal selection ensuring coverage-aware retention without merging or architectural overhead; and (4) an empirical finding that norm-based heuristics reliably identify uninformative tokens but fail to identify important ones, directly motivating the need for a learned selector. This work extends our prior result (\cite{dave2026adaptivetokenisationtemporalredundancy}) that motion-based heuristics suffice for video compression but are structurally insufficient for understanding
+\end{abstract}
+
+\section{Introduction}
+
+
+The dominant paradigm in video understanding has shifted decisively toward large multimodal models. Video Large Language Models (Video-LLMs) now achieve strong performance across a wide range of tasks such as video question answering, temporal reasoning, dense captioning done by processing sampled frames as sequences of visual tokens alongside a language query. Yet this capability comes at substantial computational cost. The quadratic scaling of attention with sequence length means that visual tokens alone account for the overwhelming majority of inference FLOPs, often exceeding language token compute by two orders of magnitude (\cite{gou2025empiricalstudyvideollmsanswer}).
+
+The standard response to this bottleneck has taken two forms. The first is frame-level selection: choose which frames to show the model before any encoding occurs. Methods in this family, including PEEK (\cite{steunou2026peekpickingessentialframes}) and VideoITG (\cite{wang2026videoitgmultimodalvideounderstanding}), have demonstrated that adaptive frame selection outperforms uniform sampling, particularly at low frame budgets. However, they operate on decoded pixels via external vision-language models, their supervision is tied to reference captions or text queries available only at selection time, and they discard entire frames rather than making fine-grained spatial decisions within frames.
+
+The second response is token-level pruning inside the model: retain all frames but reduce the number of tokens that propagate through the transformer layers. Training-free methods such as KiToke (\cite{huang2026kitokekernelbasedintervalawaretoken}) and DyCoke (\cite{tao2025dycokedynamiccompressiontokens}) reduce spatiotemporal redundancy via diversity maximisation or cosine similarity thresholding. These approaches are principled and require no training, but they are query-agnostic, optimising for visual diversity without reference to what the model actually attends to when answering a question. Training-based methods such as (\cite{wang2026dynamictokencompressionefficient}) learn a selection policy via reinforcement learning, using task accuracy as a reward signal. This produces a task-grounded selector but at substantial training cost: each update requires multiple full VLM forward passes to evaluate sampled token masks.
+
+We argue that both families miss a simpler and more direct source of supervision: the VLM itself. Recent mechanistic analysis \cite{gou2025empiricalstudyvideollmsanswer} shows that language-to-video attention at a small subset of intermediate layers, specifically layers 12–16 in 3B to 7B-scale models which has shown to account for the disproportionate majority of visual information retrieval in VideoQA. Most other layers contribute negligibly; temporal and spatial self-attention between video tokens is largely redundant. This finding implies that the model already "knows" which tokens matter, and that knowledge is readable from its own attention patterns at a well-defined depth.
+
+We exploit this directly. We train a lightweight MLP scorer ($\sim$1.0M parameters) online, supervised by language-to-video attention extracted from layers 12–16 of a frozen Qwen2.5-VL. The scorer operates on the merged visual tokens — those the language model actually consumes — gating them before any LLM decoder computation occurs. Crucially, we address a failure mode common to global top-k selection: without temporal constraints, high-scoring tokens can concentrate in a single visually rich moment, leaving later frames entirely unrepresented. We resolve this with stratified temporal selection, distributing the token budget across non-overlapping temporal bins while the scorer determines which tokens within each bin to retain. Spatial and temporal positional identity is preserved through M-RoPE position IDs, so the VLM retains full knowledge of where and when each surviving token originated.
+
+This work connects directly to our prior contribution (\cite{dave2026adaptivetokenisationtemporalredundancy}), which demonstrated that simple L1 delta thresholding over continuous video latents suffices for high-quality reconstruction without learned routing. That result showed motion-based heuristics are sufficient for compression. Here we show they are insufficient for understanding: norm-based heuristics reliably discard uninformative tokens (bottom-k selection is stable) but fail to identify semantically important ones (top-k selection degrades prediction consistency). This asymmetry directly motivates the learned scorer proposed here.
+
+\section{Method}
+ 
+Our method consists of three components: a lightweight token scorer
+trained online on a frozen VLM's internal attention, a stratified
+temporal selection strategy that enforces coverage across the video,
+and an input-level gating mechanism that removes low-scoring tokens
+before any LLM computation occurs.
+ 
+\subsection{Preliminaries}
+ 
+A Video-LLM typically consists of a frozen visual encoder
+$\text{Enc}_v$, a projector $\text{Proj}$, and a frozen decoder-only
+language model with $L$ transformer layers. Given a video $V$ sampled
+at $T$ frames, the visual encoder produces patch embeddings:
+%
+\begin{equation}
+    F = \text{Enc}_v(V) \in \mathbb{R}^{T \times N \times d_v}
+\end{equation}
+%
+where $N$ is the number of patches per frame and $d_v$ is the visual
+encoder hidden dimension. These are projected into the LLM token space
+via $\text{Proj}$, concatenated with text tokens, and processed
+through $L$ transformer layers. The full sequence length $T \cdot N +
+T_{\text{text}}$ drives the quadratic attention cost, motivating
+reduction of $T \cdot N$ before any LLM computation.
+ 
+\subsection{Supervision Signal: Language-to-Video Attention}
+ 
+We derive per-token importance scores from the frozen VLM's internal
+attention at a set of critical layers $\mathcal{L} = \{12, 13, 14,
+15, 16\}$, identified empirically by \textcite{gou2025empiricalstudyvideollmsanswer} as the
+layers where language-guided visual retrieval is concentrated.
+ 
+At each critical layer $\ell \in \mathcal{L}$, the attention module
+produces a weight matrix $A^{(\ell)} \in \mathbb{R}^{H \times S \times
+S}$, where $H$ is the number of attention heads and $S = T \cdot N +
+T_{\text{text}}$ is the full sequence length. We extract the
+language-to-video slice i.e., query positions corresponding to text
+tokens, key positions corresponding to video tokens and aggregate:
+%
+\begin{equation}
+    s_i = \frac{1}{|\mathcal{L}|}
+    \sum_{\ell \in \mathcal{L}}
+    \frac{1}{H \cdot T_{\text{text}}}
+    \sum_{h=1}^{H}
+    \sum_{j=1}^{T_{\text{text}}}
+    A^{(\ell)}_{h,\; T \cdot N + j,\; i}
+\end{equation}
+%
+This yields a scalar importance score $s_i$ for each video token $i
+\in \{1, \ldots, T \cdot N\}$. Scores are min-max normalised per
+sample to $[0, 1]$. During training, the VLM forward pass is truncated
+at layer 16 and attention weights are detached; no gradients flow into
+the VLM.
+ 
+We use text-to-vision attention specifically because it is resistant to
+the positional bias and attention sink effects that afflict vision
+encoder CLS attention and early-layer LLM
+attention. Vision-to-vision
+attention exhibits consistent recency bias; text-to-vision attention in
+middle layers does not (\cite{takezoe2026learnprunerrethinkingattentionbasedtoken}).
+ 
+\subsection{Token Scorer}
+ 
+The scorer is an MLP with a LayerNorm input, two GELU hidden layers
+(each followed by dropout $0.1$), and a linear head, mapping each merged
+visual token to a scalar importance logit:
+%
+\begin{equation}
+    \hat{s}_i = w_o^{\top}\,\sigma\!\big(W_2\,\sigma(W_1\,\text{LN}(f_i)
+    + b_1) + b_2\big) + b_o,
+    \qquad \sigma = \text{GELU},
+\end{equation}
+%
+where $f_i \in \mathbb{R}^{d}$ is the merged visual token at position
+$i$ --- the post-merger representation the language model consumes, of
+width $d = 3584$ for the 7B base ($2048$ for the 3B) --- aligned
+one-to-one with the language-to-video teacher scores. Here $W_1 \in
+\mathbb{R}^{d_h \times d}$, $W_2 \in \mathbb{R}^{d_h \times d_h}$, $w_o
+\in \mathbb{R}^{d_h}$, and $d_h = 256$, giving approximately $1.0$M
+trainable parameters for the 7B base ($0.6$M for the 3B). The frozen
+visual encoder, merger/projector, and all LLM layers are never updated.
+ 
+\paragraph{Training Objective.}
+Token selection is fundamentally a ranking problem: only the relative
+order of importance scores determines which tokens survive, not their
+absolute values. We therefore adopt the ListMLE list-wise ranking
+loss (~\cite{10.5555/3020751.3020798}). Let $\pi^*$ denote the permutation of
+token indices sorted by decreasing teacher score $s_i$. The loss is:
+%
+\begin{equation}
+    \mathcal{L}_{\text{ListMLE}} =
+    -\sum_{i=1}^{T \cdot N}
+    \log \frac{
+        \exp(\hat{s}_{\pi^*(i)})
+    }{
+        \displaystyle\sum_{\tau=i}^{T \cdot N}
+        \exp(\hat{s}_{\pi^*(\tau)})
+    }
+\end{equation}
+%
+This is the Plackett-Luce negative log-likelihood of observing the
+teacher-induced ranking under the predicted logits, optimising the
+full ranking jointly rather than independently per token.
+ 
+\paragraph{Online Training.}
+At each training step, a video-question-answer triple is sampled from a
+VideoQA dataset. A single forward pass through the frozen VLM to layer
+16 with \texttt{output\_attentions=True} produces the supervision
+signal $s$. The scorer forward pass produces $\hat{s}$. The ListMLE
+loss is computed and gradients are propagated through the scorer only.
+No labels beyond the standard VideoQA annotations present in the
+dataset are required.
+ 
+\subsection{Stratified Temporal Selection with Pareto-Adaptive Budgeting}
+
+A global top-$k$ selection strategy applied to scorer logits risks temporal coverage collapse: tokens from visually rich frames accumulate disproportionately, leaving later or quieter frames entirely unrepresented. Conversely, a uniform per-bin allocation $k_t = \lfloor K / T \rfloor$ wastes token budgets on static, uninformative background frames. 
+
+We resolve this by setting $k_t$ adaptively, exploiting the empirical observation that the tail of visual token importance follows a Pareto distribution, whose shape parameter $\alpha$ dictates the concentration of information. To properly estimate this, we must first establish the optimal estimator for a Pareto tail.
+
+\paragraph{The Naïve Model and its Maximum Likelihood Estimator.}
+Assume a set of token norms $x_i \overset{\text{iid}}{\sim} \text{Pareto}(\alpha, x_m)$ with density $f(x) = \frac{\alpha\, x_m^\alpha}{x^{\alpha+1}}$ for $x \ge x_m$. The joint likelihood function for $n$ observations is the product of their individual densities:
+%
+\begin{equation}
+    L(\alpha) = \prod_{i=1}^n \frac{\alpha\, x_m^\alpha}{x_i^{\alpha+1}}
+\end{equation}
+%
+Taking the natural logarithm transforms this product into a sum, giving the log-likelihood:
+%
+\begin{equation}
+    \ell(\alpha) = \sum_{i=1}^n \log \left( \frac{\alpha\, x_m^\alpha}{x_i^{\alpha+1}} \right) = n\log(\alpha) + n\alpha\log(x_m) - (\alpha + 1)\sum_{i=1}^n \log(x_i)
+\end{equation}
+%
+To find the maximum likelihood estimator (MLE), we take the derivative with respect to $\alpha$ and set it to zero:
+%
+\begin{equation}
+    \frac{\partial \ell}{\partial \alpha} = \frac{n}{\alpha} + n\log(x_m) - \sum_{i=1}^n \log(x_i) = 0
+\end{equation}
+%
+Solving for $\alpha$ and pulling the $n\log(x_m)$ term into the summation yields the exact MLE:
+%
+\begin{equation}
+    \hat{\alpha}_{\text{MLE}} = \frac{n}{\sum_{i=1}^n \log(x_i / x_m)}
+\end{equation}
+%
+This formulation is statistically robust because the transformation $Y = \log(X/x_m)$ yields an Exponential distribution. By evaluating the Pareto CDF at $x_m e^y$, we find $F_Y(y) = 1 - (x_m / x_m e^y)^\alpha = 1 - e^{-\alpha y}$, which is exactly $Y \sim \text{Exp}(\alpha)$. Consequently, the MLE for $\alpha$ inherits the standard properties of an exponential rate estimator, including a known exact variance and inverse-Gamma sampling distribution.
+
+\paragraph{Extreme Value Theory and the Hill Estimator.}
+However, directly applying $\hat{\alpha}_{\text{MLE}}$ to the full distribution of ViT activation norms commits a model misspecification. The bulk of the distribution is approximately log-normal; only the extreme upper region—where the semantically important tokens live—is Pareto. Fitting the naïve model to the whole sample allows the bulk to dominate, resulting in inflated and unstable $\alpha$ estimates.
+
+Following Extreme Value Theory, we relax the assumption to a regularly varying tail: $\Pr(X > x) = x^{-\alpha} L(x)$, where $L(x)$ is a slowly varying function. Given a sufficiently high threshold $u$, the scaled exceedances $X/u$ are approximately $\text{Pareto}(\alpha, 1)$. We can therefore adapt our derived MLE to operate strictly conditionally on the top $k$ order statistics. Substituting $n$ with $k$, the threshold $x_m$ with $x_{(n-k)}$, and evaluating over the top $k$ values $x_{(n-i+1)}$, we obtain the conditional MLE, whose inverse is the well-known Hill estimator:
+%
+\begin{equation}
+    \hat{H}_{k,n} = \frac{1}{\hat{\alpha}} = \frac{1}{k}\sum_{i=1}^{k} \log\frac{x_{(n-i+1)}}{x_{(n-k)}}
+\end{equation}
+
+\paragraph{Rényi Representation and Finite-Sample Properties.}
+To rigorously analyze the bias-variance trade-off in selecting the threshold $k$, we must establish the exact finite-sample distribution of the Hill estimator. As established previously, for an exact Pareto tail, the transformation $Y = \log(X/x_{(n-k)})$ yields $Y \sim \text{Exp}(\alpha)$. Because $\alpha$ acts as a rate parameter, we can express this as a scaled standard exponential: $Y = E/\alpha$, where $E \sim \text{Exp}(1)$. Substituting this scaling into the Hill estimator translates the components into differences of standard exponential order statistics:
+%
+\begin{equation}
+    Y_{(n-i+1)} - Y_{(n-k)} = \frac{1}{\alpha} \big( E_{(n-i+1)} - E_{(n-k)} \big)
+\end{equation}
+%
+Here, we invoke the Rényi representation theorem. Due to the unique memorylessness property of the exponential distribution, the excesses of the top $k$ order statistics over the threshold $E_{(n-k)}$ are strictly independent of the threshold itself. Furthermore, these $k$ gaps are jointly distributed exactly as the order statistics of a fresh, independent sample of $k$ standard exponentials, denoted $E'_j \sim \text{Exp}(1)$. Since summing a set of order statistics is mathematically identical to summing the unsorted variables, the Hill estimator simplifies remarkably in distribution:
+%
+\begin{equation}
+    \hat{H}_{k,n} \;\overset{d}{=}\; \frac{1}{\alpha k} \sum_{j=1}^{k} E'_j
+\end{equation}
+%
+This elegant reduction frames the inverse Hill estimator simply as $1/\alpha$ scaled by the sample mean of $k$ iid standard exponential variables. Given $\mathbb{E}[E'_j] = 1$ and $\operatorname{Var}(E'_j) = 1$, we can isolate the exact finite-sample expectation and variance under a strict Pareto tail:
+%
+\begin{equation}
+    \mathbb{E}[\hat{H}_{k,n}] = \frac{1}{\alpha k} \sum_{j=1}^{k} \mathbb{E}[E'_j] = \frac{1}{\alpha}
+\end{equation}
+%
+\begin{equation}
+    \operatorname{Var}(\hat{H}_{k,n}) = \frac{1}{\alpha^2 k^2} \sum_{j=1}^{k} \operatorname{Var}(E'_j) = \frac{1}{\alpha^2 k}
+\end{equation}
+%
+This exact variance cleanly highlights the central tension in threshold selection. To drive the variance of the estimator to zero, we require $k \to \infty$. However, as $k$ increases, the threshold $x_{(n-k)}$ descends into the non-Pareto bulk of the distribution, violating the slowly varying assumption of $L(x)$ and introducing massive systematic bias. Thus, temporal budgeting requires finding the optimal plateau where $k$ is sufficiently large to stabilize the $1/(\alpha^2 k)$ variance, yet strictly constrained such that $k/n \to 0$ to avoid bulk contamination.
+ 
+\subsection{Input-Level Gating and Positional Identity}
+ 
+The retained merged tokens $F_{\mathcal{I}} = \{f_i : i \in \mathcal{I}
+\} \in \mathbb{R}^{K \times d}$ are passed directly to the frozen
+language model. All other tokens are discarded before any decoder layer
+runs, saving full-depth LLM compute proportional to $1 - K /
+(T \cdot N)$.
+ 
+Critically, each retained token carries its original spatiotemporal
+position identifiers namely the frame index $t$, spatial row $x$, and spatial
+column $y$, through the LLM via
+M-RoPE (~\cite{bai2025qwen25vltechnicalreport}). The VLM therefore retains full
+knowledge of where and when each surviving token originated, without
+any positional re-indexing. The full inference pipeline is:
+%
+\begin{equation}
+    V
+    \xrightarrow{\text{Enc}_v} F
+    \xrightarrow{\text{Merger}} \tilde{F}
+    \xrightarrow{\text{Scorer}} \hat{s}
+    \xrightarrow{\text{Stratified top-}k} F_{\mathcal{I}}
+    \xrightarrow{\text{LLM}} \text{Answer}
+\end{equation}
+
+\subsection{A Privileged Gradient Oracle: A Diagnostic Study}
+
+Alongside the language-to-video attention teacher introduced above, we
+investigated a stronger, label-dependent supervision signal --- a
+Grad-CAM-style gradient oracle --- and used it to probe three questions
+that any token-selection method must answer: (i) does a small
+answer-bearing token subset exist at all; (ii) is token importance
+concentrated enough to prune aggressively; and (iii) can that importance
+be predicted from the per-token features a scorer actually sees.
+
+\paragraph{Gradient-oracle supervision.}
+Let $v_i \in \mathbb{R}^{d}$ denote the merged visual token occupying the
+$i$-th video position of the LLM input sequence (the same activation the
+scorer ingests), and let $y^\star$ be the gold answer token. With every
+VLM parameter frozen, a single backward pass of the answer
+log-probability onto the visual activations yields a per-token saliency,
+%
+\begin{equation}
+    g_i = \frac{\partial \log p(y^\star \mid V, Q)}{\partial v_i},
+    \qquad
+    s^{\text{o}}_i = \mathrm{ReLU}\!\big(\langle g_i,\, v_i \rangle\big),
+\end{equation}
+%
+min--max normalised to $[0, 1]$. Only the visual activations carry
+gradient; no model weight is updated. Because $s^{\text{o}}$
+differentiates the \emph{true} answer, it is a privileged teacher --- an
+upper bound on what any label-free scorer could recover. We train the
+scorer against it with a per-token binary cross-entropy,
+%
+\begin{equation}
+    \mathcal{L}_{\text{BCE}} = -\frac{1}{T N}\sum_{i=1}^{T N}
+    \Big[ s^{\text{o}}_i \log \sigma(\hat{s}_i)
+    + (1 - s^{\text{o}}_i)\log\big(1 - \sigma(\hat{s}_i)\big) \Big].
+\end{equation}
+
+\paragraph{Training procedure.}
+Only the scorer is trained; the visual encoder, merger, projector, and
+language model remain frozen throughout. At each step we draw a single
+video--question--answer triple and run one forward pass through the frozen
+VLM to obtain the merged visual tokens $\{v_i\}$ and the answer
+log-probability, followed by one backward pass onto $\{v_i\}$ to form the
+oracle target $s^{\text{o}}$. The same two-layer MLP of
+Section~2.3 maps each merged token to a logit $\hat{s}_i = \text{Scorer}(v_i)$,
+and is updated by $\mathcal{L}_{\text{BCE}}$ with AdamW under a
+cosine-annealed learning rate and gradient clipping; gradients are
+accumulated over several samples to emulate a larger effective batch. No
+supervision beyond the standard VideoQA answer label is used. Inference is
+identical to the main pipeline --- the predicted scores feed the same
+stratified, Pareto-budgeted top-$k$ selection of the preceding
+subsections. This route thus differs from our primary method in exactly
+two places: the teacher signal ($s^{\text{o}}$ in place of
+language-to-video attention) and the loss (BCE in place of ListMLE).
+
+\paragraph{An answer-bearing subset exists (ceiling).}
+We first ask whether \emph{any} small token subset suffices for the
+answer. Retaining the top-$K$ tokens by oracle score (stratified per
+frame) and running the multiple-choice forward on the physically
+shortened sequence, the oracle attains $0.780$ accuracy at a retention of
+$\rho = 0.1$, versus $0.674$ for matched-retention uniform sampling --- a
+gap of $+0.106$ over $4{,}996$ NExT-QA videos. A privileged selector
+therefore recovers most of the answer from a tenth of the tokens and
+clears uniform by a wide margin, confirming that aggressive token
+reduction is achievable in principle. Since the oracle keeps the tokens
+it was differentiated to favour, $+0.106$ is an upper bound rather than
+an achievable score.
+
+\paragraph{Importance is heavy-tailed (concentration).}
+We next characterise the \emph{shape} of the oracle distribution, which
+governs how aggressively the budget above may be set. Estimating the tail
+index with the moment (Einmahl--de Haan) estimator gives a median
+$\hat{\xi} = 0.43$ (IQR $[0.31, 0.55]$), with a median $50.4\%$ of tokens
+at exactly zero saliency (post-ReLU) and a median per-sample skew of
+$7.6$. Importance is thus sharply Pareto-like: roughly half of the merged
+tokens are inert and a small heavy tail carries the signal. This
+empirically substantiates the Pareto-tail premise underlying our adaptive
+budgeting, and makes a clean, balanced binary ``used vs.\ unused'' target
+available.
+
+\paragraph{The oracle is not feature-predictable (negative transfer).}
+The two results above are encouraging, but a feature-based scorer can
+exploit them only if the oracle ranking is a function of the per-token
+features it ingests. We tested this directly, correlating the oracle's
+per-token ranking against three label-free signals computed from the same
+merged tokens: token norm $\lVert v_i \rVert$, query cosine $\max_t
+\cos(v_i, q_t)$ (semantic relevance to the question text), and temporal
+novelty $1 - \cos(v_i, v_i^{t-1})$. Across $4{,}996$ videos and two
+model/frame configurations, all three are statistically indistinguishable
+from chance (Table~\ref{tab:oracle-corr}): every Spearman $\rho$ satisfies
+$|\rho| \le 0.07$, and the top-quartile recall hovers at the $0.25$ chance
+baseline. Query cosine is the only signal above chance, and only
+marginally so, while token norm sits \emph{below} chance. The
+answer-criticality the oracle captures is therefore largely invisible to
+static per-token features; an MLP regressing these features onto
+$s^{\text{o}}$ has little to extract, which is exactly the chance-level
+recall we observe when training with $\mathcal{L}_{\text{BCE}}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{l r r r r}
+\hline
+ & \multicolumn{2}{c}{3B, 8 frames} & \multicolumn{2}{c}{7B, 16 frames} \\
+Signal & $\rho$ & R@25 & $\rho$ & R@25 \\
+\hline
+Token norm $\lVert v_i \rVert$              & $-0.027$ & $0.226$ & $-0.067$ & $0.194$ \\
+Query cosine $\max_t \cos(v_i, q_t)$        & $+0.033$ & $0.286$ & $+0.036$ & $0.284$ \\
+Novelty $1 - \cos(v_i, v_i^{t-1})$          & $-0.013$ & $0.244$ & $-0.010$ & $0.246$ \\
+\hline
+\end{tabular}
+\caption{Oracle vs.\ feature-only signals: median per-video Spearman
+$\rho$ between the gradient oracle and each label-free signal, with
+top-quartile recall (R@25; chance $= 0.25$), over $4{,}996$ NExT-QA
+videos. Every signal is at or near chance, indicating the oracle is not
+feature-predictable.}
+\label{tab:oracle-corr}
+\end{table}
+
+\paragraph{Implication.}
+Taken together, the diagnostic delivers a sharp design constraint. A
+concentrated, answer-bearing token subset demonstrably exists (ceiling
+$+0.106$) and is heavy-tailed (Pareto $\hat{\xi} = 0.43$), so the
+stratified selection and Pareto-adaptive budgeting above are well-founded.
+But that subset cannot be reconstructed from static per-token features
+alone: importance is a property of a token's \emph{cross-modal
+interaction} with the query, not of the token in isolation. This is
+precisely why we supervise the scorer from the model's internal
+language-to-video attention rather than from a label-dependent gradient
+oracle, and it cautions that the scorer input must be expressive enough to
+reflect that interaction rather than scoring each token independently.
+
+\section{Proposed Experiments}
+ 
+\subsection{Setup}
+ 
+We evaluate on three VideoQA benchmarks spanning different temporal
+scales and task types:
+ 
+\begin{itemize}
+    \item \textbf{VideoMME}~\parencite{fu2025videommefirstevercomprehensiveevaluation} - 900 videos
+    across six domains with short, medium, and long duration splits.
+    Primary benchmark for overall VideoQA accuracy.
+ 
+    \item \textbf{MVBench}~\parencite{li2024mvbenchcomprehensivemultimodalvideo} - 4,000 QA
+    pairs across 20 temporally-sensitive task types including action
+    sequences, object permanence, and motion analysis.
+\end{itemize}
+ 
+The base VLM throughout is Qwen2.5-VL-7B-Instruct. The scorer is
+trained on the NExTVideo training split~\parencite{nextqa} for 10,000
+steps with AdamW ($\text{lr} = 10^{-4}$, weight decay $10^{-2}$),
+cosine annealing schedule, and gradient clipping at 1.0.
+ 
+\subsection{Baselines}
+ 
+We compare at token retention ratios $\rho \in \{25\%, 50\%, 75\%\}$
+of the full token count $T \cdot N$:
+ 
+\begin{itemize}
+    \item \textbf{Full model} - no token reduction, upper bound.
+    \item \textbf{Uniform sampling} - spatially and temporally
+    uniform subsampling, strong baseline~\parencite{steunou2026peekpickingessentialframes}.
+    \item \textbf{L1 delta thresholding} - our prior BMVC heuristic
+    adapted to token-level selection, representing the motion-based
+    approach.
+    \item \textbf{KiToke}~\parencite{huang2026kitokekernelbasedintervalawaretoken} - best
+    published training-free token compression at matched retention
+    ratios.
+    \item \textbf{SCORE}~\parencite{wang2026dynamictokencompressionefficient} - best published
+    training-based token compression, representing RL-supervised
+    selection.
+    \item \textbf{Ours} - learned scorer with stratified temporal
+    selection.
+\end{itemize}
+ 
+\subsection{Primary Metrics}
+ 
+VideoQA accuracy (multiple-choice top-1) is the primary metric across
+all benchmarks. We additionally report wallclock inference speedup
+relative to the full model at each retention ratio, measured on a
+single Ampere architecture GPU with batch size 1.
+ 
+\subsection{Ablations}
+ 
+\paragraph{Supervision source.}
+We ablate the supervision signal by replacing language-to-video
+attention with: (a) uniform random targets, (b) CLS attention from the
+vision encoder, and (c) all-token average attention. This directly
+tests whether the choice of critical-layer language-to-video attention
+is the source of any gains over baselines.
+ 
+\paragraph{Layer range.}
+We vary $\mathcal{L}$ across $\{1\text{--}5\}$, $\{6\text{--}11\}$,
+$\{12\text{--}16\}$, and $\{17\text{--}28\}$ to verify that the
+critical layer range identified by \textcite{gou2025empiricalstudyvideollmsanswer} is
+indeed the most informative for our supervision signal.
+ 
+\paragraph{Selection strategy.}
+We compare global top-$k$ against stratified top-$k$ to quantify the
+benefit of temporal coverage enforcement, particularly on long-form
+benchmarks where temporal collapse is most harmful.
+ 
+\paragraph{Norm heuristic vs.\ learned scorer.}
+We include a norm-based selector (top-$k$ by L2 norm of ViT features)
+as an additional ablation, connecting directly to our empirical finding
+that bottom-$k$ norm selection is reliable but top-$k$ norm selection
+is not. This motivates the learned scorer within the paper's own
+experimental narrative.
+ 
+\subsection{Expected Outcomes}
+ 
+We expect the learned scorer with stratified selection to outperform
+all training-free baselines (Uniform, L1 delta, KiToke) at low
+retention ratios ($\rho = 25\%$), where the quality of token selection
+matters most. The gap over SCORE should emerge from training
+efficiency: our method requires a single truncated VLM forward pass per
+training step, whereas SCORE requires $K$ full forward passes. At
+$\rho = 75\%$, differences between methods are expected to narrow, as
+sufficient tokens remain for uniform coverage to be competitive --- a
+pattern consistent with findings in \textcite{steunou2026peek} and
+\textcite{learnpruner2026}.
+ 
+The ablation on selection strategy is expected to show the largest
+gains for stratified over global top-$k$ on EgoSchema, given its
+three-minute video length and the higher probability of temporal
+collapse at aggressive retention ratios.
+
+\printbibliography
+\end{document}
+\bibliography{references}
