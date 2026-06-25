@@ -34,6 +34,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -85,6 +86,7 @@ def main():
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--attn", default="sdpa", help="attn_implementation (sdpa/eager/flash_attention_2).")
     p.add_argument("--no_full", action="store_true", help="Skip the full-model baseline.")
+    p.add_argument("--out", default="results_videomme_accuracy.json", help="Path to dump the metrics JSON.")
     args = p.parse_args()
 
     durations = list(DURATIONS) if args.durations == ["all"] else args.durations
@@ -159,11 +161,20 @@ def main():
         raise RuntimeError("No samples evaluated -- check --data_root layout (videomme/ and data/).")
 
     text_avg = text_total / n
+    valid = [d for d in durations if seen[d]]
+    col = [name for name, _, _ in settings]
+    # Video-MME headline: overall (micro) accuracy over all questions. Retention is
+    # each setting's overall accuracy vs the full model.
+    setting_overall = {c: sum(correct[d][c] for d in valid) / n for c in col}
+    full_overall = setting_overall.get("full", float("nan"))
+
+    def retention(c):
+        return setting_overall[c] / full_overall if ("full" in col and full_overall > 0) else float("nan")
+
     print(f"\nEvaluated {n} Video-MME questions across {len(durations)} duration split(s)  "
           f"(avg video tokens/clip = {vid_total / n:.0f}, avg text tokens = {text_avg:.0f})\n")
 
     # per-duration accuracy table (one column per setting)
-    col = [name for name, _, _ in settings]
     print(f"{'duration':<12}{'n':>6}" + "".join(f"{c:>11}" for c in col))
     print("-" * (18 + 11 * len(col)))
     for d in durations:
@@ -172,16 +183,48 @@ def main():
         accs = "".join(f"{correct[d][c] / seen[d]:>11.4f}" for c in col)
         print(f"{d:<12}{seen[d]:>6}{accs}")
     print("-" * (18 + 11 * len(col)))
-    # Video-MME headline number is overall (micro) accuracy over all questions.
-    valid = [d for d in durations if seen[d]]
-    overall_row = "".join(f"{sum(correct[d][c] for d in valid) / n:>11.4f}" for c in col)
+    overall_row = "".join(f"{setting_overall[c]:>11.4f}" for c in col)
     print(f"{'overall':<12}{n:>6}{overall_row}")
 
-    print(f"\n{'setting':<10}{'vid%':>8}{'vid_tok':>9}{'text_tok':>10}")
-    print("-" * 37)
-    for name, _, _ in settings:
+    # per-setting accuracy / retention / token-budget summary
+    print(f"\n{'setting':<10}{'acc':>9}{'ret%':>8}{'vid%':>8}{'vid_tok':>9}{'text_tok':>10}")
+    print("-" * 54)
+    for name in col:
         vid_pct = kept_vid[name] / vid_total * 100 if vid_total else 0.0
-        print(f"{name:<10}{vid_pct:>7.1f}%{kept_vid[name] / n:>9.0f}{text_avg:>10.0f}")
+        ret = retention(name)
+        ret_str = f"{ret * 100:>7.1f}%" if ret == ret else f"{'--':>8}"
+        print(f"{name:<10}{setting_overall[name]:>9.4f}{ret_str}{vid_pct:>7.1f}%"
+              f"{kept_vid[name] / n:>9.0f}{text_avg:>10.0f}")
+
+    # JSON dump (headline + per-duration + per-setting table, mirrors evaluate_videomme).
+    result = {
+        "experiment": "videomme_scorer_accuracy",
+        "model_name": args.model_name,
+        "scorer_ckpt": args.scorer_ckpt,
+        "data_root": args.data_root,
+        "use_subs": args.use_subs,
+        "durations": valid,
+        "n_evaluated": n,
+        "rhos": args.rhos,
+        "baselines": args.baselines,
+        "settings": col,
+        "full_accuracy": full_overall if "full" in col else float("nan"),
+        "per_duration": {d: {"n": seen[d], **{c: correct[d][c] / seen[d] for c in col}} for d in valid},
+        "table": {
+            name: {
+                "accuracy": setting_overall[name],
+                "accuracy_per_duration": {d: correct[d][name] / seen[d] for d in valid},
+                "accuracy_retention": retention(name),
+                "kept_vid_pct": (kept_vid[name] / vid_total * 100 if vid_total else 0.0),
+                "vid_tok": kept_vid[name] / n,
+                "text_tok": text_avg,
+            }
+            for name in col
+        },
+    }
+    with open(args.out, "w") as fh:
+        json.dump(result, fh, indent=2)
+    print(f"\nSaved -> {args.out}")
 
 
 if __name__ == "__main__":

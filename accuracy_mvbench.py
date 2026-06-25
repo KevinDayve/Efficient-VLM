@@ -182,6 +182,7 @@ def main():
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--attn", default="sdpa", help="attn_implementation (sdpa/eager/flash_attention_2).")
     p.add_argument("--no_full", action="store_true", help="Skip the full-model baseline.")
+    p.add_argument("--out", default="results_mvbench_accuracy.json", help="Path to dump the metrics JSON.")
     args = p.parse_args()
 
     tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
@@ -251,11 +252,21 @@ def main():
         raise RuntimeError("No samples evaluated -- check --data_root layout (json/ and video/).")
 
     text_avg = text_total / n
+    valid = [t for t in tasks if seen[t]]
+    col = [name for name, _, _ in settings]
+    # Per-setting headline accuracies: MVBench mean-over-tasks (the headline) and
+    # per-sample micro. Retention is each setting's mean accuracy vs the full model.
+    setting_mean = {c: float(np.mean([correct[t][c] / seen[t] for t in valid])) for c in col}
+    setting_micro = {c: sum(correct[t][c] for t in valid) / n for c in col}
+    full_mean = setting_mean.get("full", float("nan"))
+
+    def retention(c):
+        return setting_mean[c] / full_mean if ("full" in col and full_mean > 0) else float("nan")
+
     print(f"\nEvaluated {n} samples across {len(tasks)} task(s)  "
           f"(avg video tokens/clip = {vid_total / n:.0f}, avg text tokens = {text_avg:.0f})\n")
 
     # per-task accuracy table (one column per setting)
-    col = [name for name, _, _ in settings]
     print(f"{'task':<26}{'n':>5}" + "".join(f"{c:>10}" for c in col))
     print("-" * (31 + 10 * len(col)))
     for task in tasks:
@@ -263,19 +274,50 @@ def main():
             continue
         accs = "".join(f"{correct[task][c] / seen[task]:>10.4f}" for c in col)
         print(f"{task:<26}{seen[task]:>5}{accs}")
-    # MVBench headline number is the mean over per-task accuracies
     print("-" * (31 + 10 * len(col)))
-    valid = [t for t in tasks if seen[t]]
-    mean_row = "".join(f"{np.mean([correct[t][c] / seen[t] for t in valid]):>10.4f}" for c in col)
-    micro_row = "".join(f"{sum(correct[t][c] for t in valid) / n:>10.4f}" for c in col)
+    mean_row = "".join(f"{setting_mean[c]:>10.4f}" for c in col)
+    micro_row = "".join(f"{setting_micro[c]:>10.4f}" for c in col)
     print(f"{'mean (per-task)':<26}{'':>5}{mean_row}")
     print(f"{'micro (per-sample)':<26}{n:>5}{micro_row}")
 
-    print(f"\n{'setting':<10}{'vid%':>8}{'vid_tok':>9}{'text_tok':>10}")
-    print("-" * 37)
-    for name, _, _ in settings:
+    # per-setting accuracy / retention / token-budget summary
+    print(f"\n{'setting':<10}{'acc':>9}{'ret%':>8}{'vid%':>8}{'vid_tok':>9}{'text_tok':>10}")
+    print("-" * 54)
+    for name in col:
         vid_pct = kept_vid[name] / vid_total * 100 if vid_total else 0.0
-        print(f"{name:<10}{vid_pct:>7.1f}%{kept_vid[name] / n:>9.0f}{text_avg:>10.0f}")
+        ret = retention(name)
+        ret_str = f"{ret * 100:>7.1f}%" if ret == ret else f"{'--':>8}"
+        print(f"{name:<10}{setting_mean[name]:>9.4f}{ret_str}{vid_pct:>7.1f}%"
+              f"{kept_vid[name] / n:>9.0f}{text_avg:>10.0f}")
+
+    # JSON dump (headline + per-task + per-setting table, mirrors evaluate_mvbench).
+    result = {
+        "experiment": "mvbench_scorer_accuracy",
+        "model_name": args.model_name,
+        "scorer_ckpt": args.scorer_ckpt,
+        "data_root": args.data_root,
+        "tasks": valid,
+        "n_evaluated": n,
+        "rhos": args.rhos,
+        "baselines": args.baselines,
+        "settings": col,
+        "full_accuracy_mean": full_mean if "full" in col else float("nan"),
+        "per_task": {t: {"n": seen[t], **{c: correct[t][c] / seen[t] for c in col}} for t in valid},
+        "table": {
+            name: {
+                "accuracy_mean": setting_mean[name],
+                "accuracy_micro": setting_micro[name],
+                "accuracy_retention": retention(name),
+                "kept_vid_pct": (kept_vid[name] / vid_total * 100 if vid_total else 0.0),
+                "vid_tok": kept_vid[name] / n,
+                "text_tok": text_avg,
+            }
+            for name in col
+        },
+    }
+    with open(args.out, "w") as fh:
+        json.dump(result, fh, indent=2)
+    print(f"\nSaved -> {args.out}")
 
 
 if __name__ == "__main__":
