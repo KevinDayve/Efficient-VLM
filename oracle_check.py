@@ -48,7 +48,7 @@ import torch.nn.functional as F
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
 from qwen_vl_utils import process_vision_info
 
-from efficient_vlm.utils import einmahlHaan
+from efficient_vlm.utils import einmahlHaan, hill_tail_index
 
 
 def make_prompt(record, video_root, max_frames, max_pixels=None):
@@ -160,6 +160,68 @@ def score_answer(model, inputs_embeds, position_ids, attention_mask,
     return torch.tensor([lp[t].item() for t in letter_token_ids])
 
 
+def plot_oracle_distribution(pooled_saliency, survivals, xi_hist, hill_hist, out_path):
+    """Three-panel figure motivating the Dekkers-Einmahl-de Haan tail index.
+
+    (1) pooled saliency histogram (mass near 0, long right tail);
+    (2) log-log empirical survival P(X>x) -- a straight tail is the Pareto
+        signature the estimator detects;
+    (3) per-sample tail index: Demahl (sign-aware) vs Hill (always >= 0), with
+        the gamma=0 light-tail line and the logged median marked.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if not pooled_saliency:
+        print("  [plot] no usable samples to plot; skipping.")
+        return
+    pooled_all = np.concatenate(pooled_saliency)
+    xi_med = float(np.median(xi_hist)) if xi_hist else float("nan")
+    hill_med = float(np.median(hill_hist)) if hill_hist else float("nan")
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.6))
+
+    ax = axes[0]
+    ax.hist(pooled_all, bins=80, color="#4C72B0", log=True)
+    ax.set_xlabel("oracle saliency  relu(grad . feature)")
+    ax.set_ylabel("count (log)")
+    ax.set_title(f"(1) Saliency distribution\n{pooled_all.size:,} positive tokens, "
+                 f"{len(pooled_saliency)} samples")
+
+    ax = axes[1]
+    for xs, surv in survivals[:40]:        # cap lines so the panel stays legible
+        ax.loglog(xs, surv, color="#999999", alpha=0.25, linewidth=0.8)
+    xs = np.sort(pooled_all)
+    ax.loglog(xs, 1.0 - np.arange(xs.size) / xs.size, color="#C44E52",
+              linewidth=2.0, label="pooled")
+    ax.set_xlabel("saliency x  (log)")
+    ax.set_ylabel("P(X > x)  (log)")
+    ax.set_title("(2) Survival function\nstraight tail => heavy / Pareto")
+    ax.legend()
+
+    ax = axes[2]
+    edges = np.linspace(min(xi_hist + hill_hist + [0.0]),
+                        max(xi_hist + hill_hist + [0.0]), 30)
+    ax.hist(xi_hist, bins=edges, alpha=0.6, color="#4C72B0",
+            label=f"Demahl  (med {xi_med:.2f})")
+    ax.hist(hill_hist, bins=edges, alpha=0.6, color="#DD8452",
+            label=f"Hill  (med {hill_med:.2f})")
+    ax.axvline(0.0, color="k", linestyle="--", linewidth=1, label="gamma = 0 (light tail)")
+    ax.axvline(xi_med, color="#4C72B0", linestyle=":", linewidth=1.5)
+    ax.set_xlabel("estimated tail index  gamma (xi_hat)")
+    ax.set_ylabel("number of samples")
+    ax.set_title("(3) Tail index per sample\nDemahl is sign-aware; Hill >= 0")
+    ax.legend()
+
+    fig.suptitle("Gradient-oracle saliency: motivation for the Dekkers-Einmahl-de Haan tail index",
+                 fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    print(f"  [plot] saved -> {out_path}")
+
+
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
@@ -177,6 +239,9 @@ def main(args):
     records = records[: args.limit]
 
     xi_hist, frac_zero_hist, skew_hist = [], [], []
+    # Accumulated only when --plot: pooled positive saliency, per-sample survival
+    # curves, and the (sign-blind) Hill index for the Demahl-vs-Hill panel.
+    pooled_saliency, survivals, hill_hist = [], [], []
     oracle_correct = self_correct = uniform_correct = 0
     model_pred_correct = 0          # how often the full-model prediction is right
     self_matches_gold = 0           # how often self-oracle letter == gold letter
@@ -239,6 +304,15 @@ def main(args):
             frac_zero_hist.append((oracle <= 1e-8).float().mean().item())
             o = oracle
             skew_hist.append((((o - o.mean()) / (o.std() + 1e-8)) ** 3).mean().item())
+            if args.plot:
+                x = oracle.flatten().float().cpu().numpy()
+                x = np.sort(x[x > 1e-8])
+                if x.size >= 12:
+                    pooled_saliency.append(x)
+                    survivals.append((x, 1.0 - np.arange(x.size) / x.size))
+                    h = hill_tail_index(oracle)
+                    if h == h:
+                        hill_hist.append(h)
 
         # ---- CEILING: oracle / self_oracle / uniform downstream ----
         # base_embeds is already detached (built under no_grad); score directly.
@@ -282,6 +356,9 @@ def main(args):
     print("   self_oracle gap ~ 0  -> the label was doing the work; this branch is closed")
     print("   (self-oracle quality is bounded by model prediction accuracy above)")
 
+    if args.plot:
+        plot_oracle_distribution(pooled_saliency, survivals, xi_hist, hill_hist, args.plot_out)
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -294,6 +371,11 @@ def parse_args():
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--plot", action="store_true",
+                   help="Also save a 3-panel figure of the oracle saliency distribution "
+                        "(histogram, log-log survival, Demahl-vs-Hill tail index).")
+    p.add_argument("--plot_out", default="figs/oracle_distribution.png",
+                   help="Output path for the --plot figure.")
     return p.parse_args()
 
 
