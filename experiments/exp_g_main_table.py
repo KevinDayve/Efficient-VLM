@@ -97,7 +97,7 @@ def load_scorer(ckpt_path, input_dim, hidden_dim, device):
 def run(args):
     common.set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     strategies = args.strategies
     unknown = [s for s in strategies if s not in STRATEGIES]
@@ -211,7 +211,10 @@ def parse_args():
     p.add_argument("--fastv_layer", type=int, default=2)
     p.add_argument("--scorer_ckpt", default="", help="trained scorer for strategy 'ours' (from exp_f)")
     p.add_argument("--hidden_dim", type=int, default=256)
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_g.json")
     return p.parse_args()

@@ -46,7 +46,7 @@ from experiments.exp_b_oracle_ceiling import evaluate_with_kept
 
 def run(args):
     common.set_seed(args.seed)
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     strategies = ["norm_high", "norm_low", "uniform"]
     if args.include_oracle:
@@ -152,7 +152,10 @@ def parse_args():
                    help="critical layers, only used when --include_oracle is set")
     p.add_argument("--include_oracle", action="store_true",
                    help="also evaluate the attention oracle as an upper-bound reference")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_e.json")
     return p.parse_args()

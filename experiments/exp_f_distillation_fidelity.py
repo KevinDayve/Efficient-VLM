@@ -100,19 +100,31 @@ def evaluate_fidelity(scorer, feats, scores, rhos, device):
 def run(args):
     common.set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     samples = common.load_mc_samples(args)
-    feats, scores = build_cache(model, processor, samples, args)
-    if len(feats) < 4:
-        raise RuntimeError(f"Only cached {len(feats)} samples -- need more for a train/val split.")
+    # Split by video BEFORE caching. The query-blind scorer is a per-patch MLP, so
+    # two questions of the same video share identical ViT features; a sample-level
+    # split would leak those features across train/val and inflate held-out
+    # fidelity. Group by video_id and assign whole videos to one side.
+    by_video: dict = {}
+    for s in samples:
+        by_video.setdefault(s.video_id, []).append(s)
+    vids = list(by_video.keys())  # loader already shuffled; keep deterministic order
+    n_val_vid = max(1, int(len(vids) * args.val_frac))
+    val_samples = [s for v in vids[:n_val_vid] for s in by_video[v]]
+    train_samples = [s for v in vids[n_val_vid:] for s in by_video[v]]
 
-    n_val = max(1, int(len(feats) * args.val_frac))
-    val_feats, val_scores = feats[:n_val], scores[:n_val]
-    train_feats, train_scores = feats[n_val:], scores[n_val:]
-    print(f"Cached {len(feats)} samples -> {len(train_feats)} train / {len(val_feats)} val")
+    train_feats, train_scores = build_cache(model, processor, train_samples, args)
+    val_feats, val_scores = build_cache(model, processor, val_samples, args)
+    if len(train_feats) < 2 or len(val_feats) < 1:
+        raise RuntimeError(
+            f"Too few cached samples (train={len(train_feats)}, val={len(val_feats)}) "
+            "-- increase --max_pairs.")
+    print(f"Cached {len(train_feats)} train / {len(val_feats)} val "
+          f"(split by video over {len(vids)} videos)")
 
-    input_dim = feats[0].shape[-1]
+    input_dim = train_feats[0].shape[-1]
     scorer = Scorer(input_dim=input_dim, hidden_dim=args.hidden_dim).to(device)
     n_params = sum(p.numel() for p in scorer.parameters())
     print(f"Scorer: input_dim={input_dim}, ~{n_params/1e3:.0f}K params")
@@ -172,7 +184,10 @@ def parse_args():
     p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-2)
     p.add_argument("--checkpoint", default="", help="optional path to save the trained scorer")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_f.json")
     return p.parse_args()

@@ -45,7 +45,7 @@ from experiments.exp_b_oracle_ceiling import evaluate_with_kept
 
 def run(args):
     common.set_seed(args.seed)
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     samples = common.load_mc_samples(args)
     by_video: Dict[str, List] = defaultdict(list)
@@ -165,7 +165,10 @@ def parse_args():
     p.add_argument("--rho", type=float, default=0.20)
     p.add_argument("--gap_threshold", type=float, default=0.02,
                    help="accuracy gap above which query-conditioning is deemed necessary")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL and corrupts the attention scores; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_c.json")
     return p.parse_args()

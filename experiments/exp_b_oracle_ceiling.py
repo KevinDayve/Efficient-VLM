@@ -45,7 +45,7 @@ def evaluate_with_kept(model, processor, prepared, sample, kept_local_idx):
 
 def run(args):
     common.set_seed(args.seed)
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     strategies = ["oracle", "stratified_oracle", "uniform", "kitoke"]
     if args.include_norm:
@@ -159,7 +159,10 @@ def parse_args():
     p.add_argument("--include_norm", action="store_true", help="also evaluate L2-norm top-k")
     p.add_argument("--kill_threshold", type=float, default=0.01,
                    help="if mean(oracle-uniform) <= this, flag the kill criterion")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL and corrupts the oracle scores; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_b.json")
     return p.parse_args()

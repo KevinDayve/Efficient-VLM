@@ -37,7 +37,7 @@ def parse_layer_sets(specs):
 
 def run(args):
     common.set_seed(args.seed)
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
 
     do = {a: (args.ablation in ("all", a)) for a in ("supervision", "layers", "selection")}
     layer_sets = parse_layer_sets(args.layer_sets)
@@ -161,7 +161,10 @@ def parse_args():
                    help="comma-separated layer sets to compare in the layer-range ablation")
     p.add_argument("--rhos", type=float, nargs="+", default=[0.10, 0.20, 0.25, 0.50])
     p.add_argument("--ablation", choices=["all", "supervision", "layers", "selection"], default="all")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_h.json")
     return p.parse_args()

@@ -62,7 +62,7 @@ def build_windows(n_layers: int, args) -> List[List[int]]:
 
 def run(args):
     common.set_seed(args.seed)
-    model, processor = common.load_model_and_processor(args.model_name, fp16=args.fp16)
+    model, processor = common.load_model_and_processor(args.model_name, dtype=args.dtype)
     n_layers = len(common.get_decoder_layers(model))
     windows = build_windows(n_layers, args)
     mode = "paper ranges" if args.paper_ranges else f"sliding window size={args.window} layers={args.sweep_min}-{args.sweep_max}"
@@ -152,7 +152,7 @@ def parse_args():
     p.add_argument("--max_pixels", type=int, default=None,
                    help="Cap per-frame resolution (pixels) to bound video-token count "
                         "and memory. e.g. 50176 (224x224). None = Qwen dynamic resolution.")
-    p.add_argument("--window", type=int, default=3, help="sliding window size (2-4)")
+    p.add_argument("--window", type=int, default=4, help="sliding window size (2-4)")
     p.add_argument("--stride", type=int, default=1)
     p.add_argument("--sweep_min", type=int, default=8,
                    help="first layer to include in focused sliding sweep")
@@ -162,7 +162,10 @@ def parse_args():
                    help="use the four coarse non-overlapping ranges from the paper (§3.4) "
                         "instead of a sliding window")
     p.add_argument("--top_k", type=int, default=5, help="how many top windows to report")
-    p.add_argument("--fp16", action="store_true", default=True)
+    p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16",
+                   help="Compute dtype for the frozen VLM. bf16 (default) is correct on "
+                        "Ampere+/Ada (RTX 6000 Ada, A100, H100); fp16 risks NaN attention "
+                        "on Qwen2.5-VL and corrupts the knockout signal; fp32 for max precision.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default="results_exp_a.json")
     return p.parse_args()
