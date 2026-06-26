@@ -80,7 +80,8 @@ def main():
     p.add_argument("--k_min", type=int, default=1)
     p.add_argument("--temp", type=float, default=1.0)
     p.add_argument("--beta_max", type=float, default=3.0)
-    p.add_argument("--max_frames", type=int, default=16, help="frames sampled per clip (uniform over the full video).")
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip (uniform over the full video); fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped. Video-MME clips are long, so the cap binds and sampling matches the old fixed-count behaviour.")
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None, help="cap questions PER DURATION split (debug).")
     p.add_argument("--use_subs", action="store_true", help="Inject frame-aligned .srt subtitles (Video-MME w/ subs).")
@@ -139,7 +140,7 @@ def main():
                         os.path.join(sub_dir, f"{rec['videoID']}.srt"), timestamps)
                 text, letters, gt_idx = build_prompt(rec, subs)
                 prompt = make_mvbench_prompt(video_path, "video", False, rec, text,
-                                             args.max_frames, args.max_pixels)
+                                             args.max_frames, args.max_pixels, args.fps)
                 inputs = build_inputs(processor, model, prompt)
                 letter_ids = letter_token_ids(processor, letters)
             except Exception as e:  # missing/corrupt clip -> skip

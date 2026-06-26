@@ -30,8 +30,8 @@ from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
 
-def build_inputs(processor, model, video, prompt, max_frames, max_pixels):
-    video_item = {"type": "video", "video": video, "nframes": max_frames}
+def build_inputs(processor, model, video, prompt, max_frames, max_pixels, fps):
+    video_item = {"type": "video", "video": video, "fps": fps, "max_frames": max_frames}
     if max_pixels is not None:
         video_item["max_pixels"] = max_pixels
     messages = [{"role": "user", "content": [video_item, {"type": "text", "text": prompt}]}]
@@ -92,7 +92,8 @@ def main():
     p.add_argument("--k_min", type=int, default=1)
     p.add_argument("--temp", type=float, default=1.0)
     p.add_argument("--beta_max", type=float, default=3.0)
-    p.add_argument("--max_frames", type=int, default=8)
+    p.add_argument("--max_frames", type=int, default=8, help="upper cap on frames per clip; fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped.")
     p.add_argument("--max_new_tokens", type=int, default=64)
     p.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (e.g. 100352) on small GPUs.")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"],
@@ -110,7 +111,7 @@ def main():
     eos = model.generation_config.eos_token_id
     eos_ids = set(eos) if isinstance(eos, (list, tuple)) else {eos}
 
-    inputs = build_inputs(processor, model, args.video, args.prompt, args.max_frames, args.max_pixels)
+    inputs = build_inputs(processor, model, args.video, args.prompt, args.max_frames, args.max_pixels, args.fps)
 
     s = token_stats(model, inputs, args.keep_ratio)
     print(f"video tokens: {s['video']} -> {s['kept_video']}  (keep_ratio={args.keep_ratio}, "

@@ -36,7 +36,7 @@ from qwen_vl_utils import process_vision_info
 from efficient_vlm.utils import einmahlHaan
 
 
-def make_prompt(record, video_root, max_frames, max_pixels=None):
+def make_prompt(record, video_root, max_frames, max_pixels=None, fps=2.0):
     rel = record["video"]["path"]
     abs_path = os.path.normpath(os.path.join(video_root, rel))
     content = []
@@ -45,7 +45,7 @@ def make_prompt(record, video_root, max_frames, max_pixels=None):
             continue
         for item in msg["content"]:
             if item.get("type") == "video":
-                vid = {"type": "video", "video": abs_path, "nframes": max_frames}
+                vid = {"type": "video", "video": abs_path, "fps": fps, "max_frames": max_frames}
                 if max_pixels is not None:
                     vid["max_pixels"] = max_pixels
                 content.append(vid)
@@ -86,7 +86,7 @@ def main(args):
 
     xi_hist, median_hist = [], []
     for i, rec in enumerate(records):
-        prompt = make_prompt(rec, args.video_root, args.max_frames, args.max_pixels)
+        prompt = make_prompt(rec, args.video_root, args.max_frames, args.max_pixels, args.fps)
         text = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
         img_in, vid_in = process_vision_info(prompt)
         inputs = processor(text=[text], images=img_in, videos=vid_in, return_tensors="pt")
@@ -125,7 +125,8 @@ def parse_args():
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--data_file", required=True)
     p.add_argument("--video_root", required=True)
-    p.add_argument("--max_frames", type=int, default=16)
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip; fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped.")
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--limit", type=int, default=60)
     p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")

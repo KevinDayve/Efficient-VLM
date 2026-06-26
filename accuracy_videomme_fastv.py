@@ -61,7 +61,8 @@ def main():
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-7B-Instruct")
     p.add_argument("--fastv_k", type=int, nargs="+", default=[2])
     p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.5, 0.75])
-    p.add_argument("--max_frames", type=int, default=16)
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip; fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped. Video-MME clips are long, so the cap binds and sampling matches the old fixed-count behaviour.")
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--use_subs", action="store_true")
@@ -136,7 +137,7 @@ def main():
 
                 prompt = make_mvbench_prompt(
                     video_path, "video", False, rec, text,
-                    args.max_frames, args.max_pixels,
+                    args.max_frames, args.max_pixels, args.fps,
                 )
                 inputs = build_inputs(processor, model, prompt)
 

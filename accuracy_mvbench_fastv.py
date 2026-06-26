@@ -72,7 +72,8 @@ def main():
                    help="FastV filtering layer(s) K: layers 0..K run full, layers >K run pruned.")
     p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.5, 0.75],
                    help="Visual-token KEEP ratios (FastV prune ratio R = 1 - rho).")
-    p.add_argument("--max_frames", type=int, default=16, help="frames sampled per clip (MVBench default 16).")
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip (MVBench default 16); fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video-file sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped.")
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None, help="cap samples PER TASK (debug).")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
@@ -128,7 +129,7 @@ def main():
                 path = os.path.join(video_dir, subdir, rec["video"])
                 text, letters, gt_idx = build_prompt(rec)
                 prompt = make_mvbench_prompt(path, data_type, has_bound, rec, text,
-                                             args.max_frames, args.max_pixels)
+                                             args.max_frames, args.max_pixels, args.fps)
                 inputs = build_inputs(processor, model, prompt)
                 letter_ids = letter_token_ids(processor, letters)
             except Exception as e:  # missing/corrupt clip -> skip

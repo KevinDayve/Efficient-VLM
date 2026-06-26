@@ -118,15 +118,18 @@ def frame_indices(bound, fps, max_frame, num_segments, first_idx=0):
     return np.linspace(start_idx, end_idx, n).round().astype(int)
 
 
-def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels):
+def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels, fps):
     """Qwen chat prompt whose video item drives ``process_vision_info`` -- the
     same sampler train_oracle.py uses, so eval frame-selection matches training.
 
-    Video-file tasks pass the path plus ``nframes`` (and ``video_start`` /
-    ``video_end`` seconds when the task is temporally bounded, so qwen_vl_utils
-    trims before its ``linspace`` sampling). The frame-folder task (tvqa) passes
-    an explicit, bound-restricted, uniformly sub-sampled list of frame paths,
-    because qwen_vl_utils neither trims nor sub-samples a frame list."""
+    Video-file tasks pass the path plus ``fps`` capped at ``max_frames`` (and
+    ``video_start`` / ``video_end`` seconds when the task is temporally bounded,
+    so qwen_vl_utils trims before its ``linspace`` sampling). Using ``fps`` rather
+    than a fixed ``nframes`` lets qwen_vl_utils clamp the count to the clip's own
+    length: short clips yield fewer frames instead of raising and being skipped.
+    The frame-folder task (tvqa) passes an explicit, bound-restricted, uniformly
+    sub-sampled list of frame paths, because qwen_vl_utils neither trims nor
+    sub-samples a frame list."""
     if data_type == "frame":
         bound = (record["start"], record["end"]) if has_bound else None
         names = sorted(os.listdir(path))
@@ -134,7 +137,7 @@ def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, ma
         vid = {"type": "video",
                "video": [os.path.join(path, f"{i:05d}.jpg") for i in idxs]}
     else:
-        vid = {"type": "video", "video": path, "nframes": max_frames}
+        vid = {"type": "video", "video": path, "fps": fps, "max_frames": max_frames}
         if has_bound:
             vid["video_start"] = record["start"]
             vid["video_end"] = record["end"]
@@ -184,7 +187,7 @@ def prepare_sample(model, processor, path, data_type, has_bound, record,
     ``None`` if there are no video tokens.
     """
     prompt = make_mvbench_prompt(path, data_type, has_bound, record, text,
-                                 args.max_frames, args.max_pixels)
+                                 args.max_frames, args.max_pixels, args.fps)
     chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(prompt)
     inputs = processor(text=[chat], images=image_inputs, videos=video_inputs, return_tensors="pt")
@@ -444,7 +447,8 @@ def parse_args():
     p.add_argument("--strategies", nargs="+", default=["ours", "uniform", "random"],
                    help=f"gating strategies to sweep: {list(STRATEGIES)} (full is always the baseline)")
     p.add_argument("--max_samples", type=int, default=None, help="Cap records evaluated PER TASK (debug).")
-    p.add_argument("--max_frames", type=int, default=16, help="frames sampled per clip (MVBench default 16).")
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames sampled per clip (MVBench default 16); fps-based sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video-file sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped.")
     p.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (e.g. 100352) on small GPUs.")
     # stratified-Pareto selection knobs (must match how you intend to deploy 'ours')
     p.add_argument("--k_min", type=int, default=1, help="per-frame coverage floor for stratified selection")

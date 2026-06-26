@@ -98,7 +98,8 @@ def main():
     p.add_argument("--k_min", type=int, default=1)
     p.add_argument("--temp", type=float, default=1.0)
     p.add_argument("--beta_max", type=float, default=3.0)
-    p.add_argument("--max_frames", type=int, default=8)
+    p.add_argument("--max_frames", type=int, default=8, help="upper cap on frames per clip; fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped.")
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
@@ -128,7 +129,7 @@ def main():
             nframes = rec["video"].get("num_frames", args.max_frames)
             choices = rec["all_choices"]
             gt_idx = choices.index(rec["gt"])
-            video_item = {"type": "video", "video": video_path, "nframes": nframes}
+            video_item = {"type": "video", "video": video_path, "fps": args.fps, "max_frames": nframes}
             if args.max_pixels is not None:
                 video_item["max_pixels"] = args.max_pixels
             messages = [{"role": "user", "content": [video_item, {"type": "text", "text": user_text(rec)}]}]

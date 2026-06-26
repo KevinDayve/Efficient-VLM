@@ -369,7 +369,8 @@ def parse_args():
     p.add_argument("--strategies", nargs="+", default=["ours", "uniform", "random"],
                    help=f"gating strategies to sweep: {list(STRATEGIES)} (full is always the baseline)")
     p.add_argument("--max_samples", type=int, default=None, help="Cap questions evaluated PER DURATION split (debug).")
-    p.add_argument("--max_frames", type=int, default=16, help="frames sampled per clip (uniform over the full video).")
+    p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip (uniform over the full video); fps sampling clamps to the clip length below this.")
+    p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling (qwen_vl_utils default 2.0); short clips yield fewer frames instead of being skipped. Video-MME clips are long, so the cap binds and sampling matches the old fixed-count behaviour.")
     p.add_argument("--max_pixels", type=int, default=None, help="Cap per-frame resolution (e.g. 100352) on small GPUs.")
     p.add_argument("--use_subs", action="store_true", help="Inject frame-aligned .srt subtitles (Video-MME w/ subs).")
     # stratified-Pareto selection knobs (must match how you intend to deploy 'ours')

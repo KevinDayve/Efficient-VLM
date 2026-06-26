@@ -317,12 +317,12 @@ def _options_block(options: List[str]) -> str:
     return "\n".join(f"{LETTERS[i]}. {opt}" for i, opt in enumerate(options))
 
 
-def build_mc_messages(sample: MCSample, max_frames: int, max_pixels: int = None) -> List[dict]:
+def build_mc_messages(sample: MCSample, max_frames: int, max_pixels: int = None, fps: float = 2.0) -> List[dict]:
     prompt = (
         f"{sample.question}\n{_options_block(sample.options)}\n"
         "Answer with the letter of the correct option."
     )
-    video_item = {"type": "video", "video": sample.video_path, "nframes": max_frames}
+    video_item = {"type": "video", "video": sample.video_path, "fps": fps, "max_frames": max_frames}
     if max_pixels is not None:
         video_item["max_pixels"] = max_pixels
     return [
@@ -336,11 +336,11 @@ def build_mc_messages(sample: MCSample, max_frames: int, max_pixels: int = None)
     ]
 
 
-def prepare_inputs(model, processor, sample: MCSample, max_frames: int, max_pixels: int = None) -> PreparedInputs:
+def prepare_inputs(model, processor, sample: MCSample, max_frames: int, max_pixels: int = None, fps: float = 2.0) -> PreparedInputs:
     if process_vision_info is None:
         raise ImportError("qwen-vl-utils is required (pip install qwen-vl-utils).")
 
-    messages = build_mc_messages(sample, max_frames, max_pixels=max_pixels)
+    messages = build_mc_messages(sample, max_frames, max_pixels=max_pixels, fps=fps)
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
     enc = processor(text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt")
