@@ -50,7 +50,6 @@ import argparse
 
 import numpy as np
 import torch
-from PIL import Image
 from tqdm import tqdm
 
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLProcessor
@@ -91,16 +90,20 @@ def load_records(data_root):
     return df.to_dict("records")
 
 
-def read_video(path, num_segments):
-    """Uniform full-clip frame sampling. Returns (PIL frames, timestamps in sec)."""
+def frame_timestamps(path, num_segments):
+    """Timestamps (sec) of the frames ``process_vision_info`` will sample.
+
+    The clip itself is decoded and sampled inside ``prepare_sample`` (via
+    ``process_vision_info``); for an unbounded video that samples at
+    ``linspace(0, total-1, nframes)`` -- exactly what ``frame_indices`` returns --
+    so these timestamps align with the frames the model actually sees, and let us
+    attach the right subtitle line to each sampled frame."""
     from decord import VideoReader, cpu
 
     vr = VideoReader(path, ctx=cpu(0), num_threads=1)
     fps = float(vr.get_avg_fps())
     idxs = frame_indices(None, fps, len(vr) - 1, num_segments, first_idx=0)
-    frames = [Image.fromarray(vr[i].asnumpy()).convert("RGB") for i in idxs]
-    timestamps = [float(i) / fps for i in idxs]
-    return frames, timestamps
+    return [float(i) / fps for i in idxs]
 
 
 def parse_srt(path):
@@ -205,12 +208,12 @@ def run(args):
         for rec in tqdm(by_dur[d], desc=d):
             try:
                 video_path = os.path.join(video_dir, f"{rec['videoID']}.mp4")
-                frames, timestamps = read_video(video_path, args.max_frames)
+                timestamps = frame_timestamps(video_path, args.max_frames)
                 subs = (subtitles_for_frames(os.path.join(sub_dir, f"{rec['videoID']}.srt"),
                                              timestamps) if args.use_subs else None)
                 text, letters, gt_idx = build_prompt(rec, subs)
-                sample = prepare_sample(model, processor, frames, text, letters, gt_idx,
-                                        video_token_id, device, args)
+                sample = prepare_sample(model, processor, video_path, "video", False, rec,
+                                        text, letters, gt_idx, video_token_id, device, args)
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{d}] {rec.get('videoID')}: {e}")
                 continue

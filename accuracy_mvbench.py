@@ -4,8 +4,9 @@ MVBench is 20 video-MC tasks. Annotations live in ``<data_root>/json/<task>.json
 (a list of ``{"video", "question", "candidates", "answer"[, "start", "end"]}``) and
 the clips live under ``<data_root>/video/<source_subdir>/``. The official task ->
 (json, video_subdir, data_type, has_temporal_bound) mapping is reproduced in
-``DATA_LIST`` below; frames are sampled exactly as the reference MVBench loader
-(uniform segments, fps=3 for the frame-folder task, respecting start/end bounds).
+``DATA_LIST`` below; each clip is fed through ``qwen_vl_utils.process_vision_info``
+(the sampler train_oracle.py uses), with ``video_start``/``video_end`` for the
+temporally bounded tasks and a fps=3 frame list for the frame-folder task.
 
 For every sample we run ONE forward (no autoregressive decoding) and read the
 next-token logits at the final position, restricted to the option-letter tokens --
@@ -34,10 +35,10 @@ import os
 
 import numpy as np
 import torch
-from PIL import Image
 from tqdm import tqdm
 
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from qwen_vl_utils import process_vision_info
 
 # task -> (json file, video subdir under <data_root>/video, data_type, has_temporal_bound)
 DATA_LIST = {
@@ -69,37 +70,48 @@ SYSTEM_PROMPT = (
     "your observations, select the best option that accurately addresses the question."
 )
 
+TEMPORAL_PATCH_SIZE = 2  # Qwen2.5-VL pairs adjacent frames; the sampled count must be even (FRAME_FACTOR).
+
 
 def frame_indices(bound, fps, max_frame, num_segments, first_idx=0):
-    """Uniform segment-center sampling, identical to the reference MVBench loader."""
+    """Frame indices for the frame-folder (tvqa) task, matching qwen_vl_utils.
+
+    Mirrors ``qwen_vl_utils._read_video_decord`` (the sampler train_oracle.py
+    uses): ``linspace(start_frame, end_frame, nframes).round()`` with the count
+    forced even. Video-file tasks are sampled by ``process_vision_info`` itself;
+    this is only needed for the frame folder, where qwen_vl_utils takes an
+    explicit frame list and neither trims to the clip bound nor sub-samples it."""
     start, end = (bound[0], bound[1]) if bound else (-1e5, 1e5)
     start_idx = max(first_idx, round(start * fps))
     end_idx = min(round(end * fps), max_frame)
-    seg = float(end_idx - start_idx) / num_segments
-    return np.array([int(start_idx + seg / 2 + np.round(seg * i)) for i in range(num_segments)])
+    n = max(TEMPORAL_PATCH_SIZE, round(num_segments / TEMPORAL_PATCH_SIZE) * TEMPORAL_PATCH_SIZE)
+    return np.linspace(start_idx, end_idx, n).round().astype(int)
 
 
-def read_video(path, bound, num_segments):
-    from decord import VideoReader, cpu
+def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels):
+    """Qwen chat prompt whose video item drives ``process_vision_info`` -- the
+    same sampler train_oracle.py uses, so eval frame-selection matches training.
 
-    vr = VideoReader(path, ctx=cpu(0), num_threads=1)
-    idxs = frame_indices(bound, float(vr.get_avg_fps()), len(vr) - 1, num_segments, first_idx=0)
-    return [Image.fromarray(vr[i].asnumpy()).convert("RGB") for i in idxs]
-
-
-def read_frames(path, bound, num_segments, fps=3):
-    """Frame-folder task (tvqa): images are named 00001.jpg.. at 3 fps."""
-    names = sorted(os.listdir(path))
-    idxs = frame_indices(bound, fps, len(names), num_segments, first_idx=1)
-    return [Image.open(os.path.join(path, f"{i:05d}.jpg")).convert("RGB") for i in idxs]
-
-
-def load_frames(video_root, subdir, data_type, record, num_segments):
-    path = os.path.join(video_root, subdir, record["video"])
-    bound = (record["start"], record["end"]) if "start" in record else None
+    Video-file tasks pass the path plus ``nframes`` (and ``video_start`` /
+    ``video_end`` seconds when the task is temporally bounded, so qwen_vl_utils
+    trims before its ``linspace`` sampling). The frame-folder task (tvqa) passes
+    an explicit, bound-restricted, uniformly sub-sampled list of frame paths,
+    because qwen_vl_utils neither trims nor sub-samples a frame list. Video-MME
+    reuses this with ``data_type="video"`` and ``has_bound=False``."""
     if data_type == "frame":
-        return read_frames(path, bound, num_segments)
-    return read_video(path, bound, num_segments)
+        bound = (record["start"], record["end"]) if has_bound else None
+        names = sorted(os.listdir(path))
+        idxs = frame_indices(bound, 3, len(names), max_frames, first_idx=1)
+        vid = {"type": "video",
+               "video": [os.path.join(path, f"{i:05d}.jpg") for i in idxs]}
+    else:
+        vid = {"type": "video", "video": path, "nframes": max_frames}
+        if has_bound:
+            vid["video_start"] = record["start"]
+            vid["video_end"] = record["end"]
+    if max_pixels is not None:
+        vid["max_pixels"] = max_pixels
+    return [{"role": "user", "content": [vid, {"type": "text", "text": text}]}]
 
 
 def build_prompt(record):
@@ -149,14 +161,15 @@ def kept_video_count(model, inputs, keep_ratio):
     return min(kept, n_video)
 
 
-def build_inputs(processor, model, frames, text, max_pixels):
-    """Feed pre-sampled frames straight to the processor as one video clip."""
-    if max_pixels is not None:
-        processor.image_processor.max_pixels = max_pixels
-    messages = [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": text}]}]
-    chat = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    video = np.stack([np.asarray(f) for f in frames])  # (T, H, W, 3)
-    inputs = processor(text=[chat], videos=[video], return_tensors="pt", fps=2.0)
+def build_inputs(processor, model, prompt):
+    """Build model inputs for one Qwen prompt via ``process_vision_info``.
+
+    ``prompt`` comes from ``make_mvbench_prompt`` (or its Video-MME reuse), so the
+    clip is decoded and frame-sampled by qwen_vl_utils -- matching training and the
+    evaluate_* scorer eval. ``max_pixels`` lives in the prompt's video item."""
+    chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(prompt)
+    inputs = processor(text=[chat], images=image_inputs, videos=video_inputs, return_tensors="pt")
     return inputs.to(model.device)
 
 
@@ -225,10 +238,11 @@ def main():
 
         for rec in tqdm(records, desc=task):
             try:
-                bound_rec = rec if has_bound else {k: v for k, v in rec.items() if k not in ("start", "end")}
-                frames = load_frames(video_dir, subdir, data_type, bound_rec, args.max_frames)
+                path = os.path.join(video_dir, subdir, rec["video"])
                 text, letters, gt_idx = build_prompt(rec)
-                inputs = build_inputs(processor, model, frames, text, args.max_pixels)
+                prompt = make_mvbench_prompt(path, data_type, has_bound, rec, text,
+                                             args.max_frames, args.max_pixels)
+                inputs = build_inputs(processor, model, prompt)
                 letter_ids = letter_token_ids(processor, letters)
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")

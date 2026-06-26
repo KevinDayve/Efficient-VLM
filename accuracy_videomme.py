@@ -43,21 +43,22 @@ from tqdm import tqdm
 
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-# Video-MME data layer (parquet load, frame sampling, subtitles, prompt).
+# Video-MME data layer (parquet load, subtitle timestamps, subtitles, prompt).
 from evaluate_videomme import (
     DURATIONS,
     build_prompt,
     load_records,
-    read_video,
+    frame_timestamps,
     subtitles_for_frames,
 )
-
-# Native-gating model plumbing, shared with the MVBench scorer eval so the two
-# benchmarks (and the FastV counterparts) read out accuracy identically.
+# Native-gating model plumbing + the clip -> Qwen prompt builder (qwen_vl_utils
+# sampling), shared with the MVBench scorer eval so the two benchmarks (and the
+# FastV counterparts) read out accuracy identically.
 from accuracy_mvbench import (
     build_inputs,
     kept_video_count,
     letter_token_ids,
+    make_mvbench_prompt,
     predict,
     video_text_counts,
 )
@@ -131,13 +132,15 @@ def main():
         for rec in tqdm(by_duration[duration], desc=duration):
             try:
                 video_path = os.path.join(video_dir, f"{rec['videoID']}.mp4")
-                frames, timestamps = read_video(video_path, args.max_frames)
+                timestamps = frame_timestamps(video_path, args.max_frames)
                 subs = None
                 if args.use_subs:
                     subs = subtitles_for_frames(
                         os.path.join(sub_dir, f"{rec['videoID']}.srt"), timestamps)
                 text, letters, gt_idx = build_prompt(rec, subs)
-                inputs = build_inputs(processor, model, frames, text, args.max_pixels)
+                prompt = make_mvbench_prompt(video_path, "video", False, rec, text,
+                                             args.max_frames, args.max_pixels)
+                inputs = build_inputs(processor, model, prompt)
                 letter_ids = letter_token_ids(processor, letters)
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{duration}] {rec.get('videoID')}: {e}")

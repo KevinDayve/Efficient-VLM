@@ -28,13 +28,14 @@ from evaluate_videomme import (
     DURATIONS,
     build_prompt,
     load_records,
-    read_video,
+    frame_timestamps,
     subtitles_for_frames,
 )
 
 from accuracy_mvbench import (
     build_inputs,
     letter_token_ids,
+    make_mvbench_prompt,
     predict,
     video_text_counts,
 )
@@ -122,7 +123,7 @@ def main():
         for rec in tqdm(by_duration[duration], desc=duration):
             try:
                 video_path = os.path.join(video_dir, f"{rec['videoID']}.mp4")
-                frames, timestamps = read_video(video_path, args.max_frames)
+                timestamps = frame_timestamps(video_path, args.max_frames)
 
                 subs = None
                 if args.use_subs:
@@ -133,13 +134,11 @@ def main():
 
                 text, letters, gt_idx = build_prompt(rec, subs)
 
-                inputs = build_inputs(
-                    processor,
-                    model,
-                    frames,
-                    text,
-                    args.max_pixels,
+                prompt = make_mvbench_prompt(
+                    video_path, "video", False, rec, text,
+                    args.max_frames, args.max_pixels,
                 )
+                inputs = build_inputs(processor, model, prompt)
 
                 letter_ids = letter_token_ids(processor, letters)
 

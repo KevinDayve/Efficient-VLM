@@ -39,7 +39,7 @@ from accuracy_mvbench import (
     build_inputs,
     build_prompt,
     letter_token_ids,
-    load_frames,
+    make_mvbench_prompt,
     predict,
     video_text_counts,
 )
@@ -125,10 +125,11 @@ def main():
 
         for rec in tqdm(records, desc=task):
             try:
-                bound_rec = rec if has_bound else {k: v for k, v in rec.items() if k not in ("start", "end")}
-                frames = load_frames(video_dir, subdir, data_type, bound_rec, args.max_frames)
+                path = os.path.join(video_dir, subdir, rec["video"])
                 text, letters, gt_idx = build_prompt(rec)
-                inputs = build_inputs(processor, model, frames, text, args.max_pixels)
+                prompt = make_mvbench_prompt(path, data_type, has_bound, rec, text,
+                                             args.max_frames, args.max_pixels)
+                inputs = build_inputs(processor, model, prompt)
                 letter_ids = letter_token_ids(processor, letters)
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")
