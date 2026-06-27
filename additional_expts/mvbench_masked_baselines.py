@@ -1,40 +1,35 @@
-"""Content-free video-token reduction baselines on OpenGVLab/MVBench.
+"""MVBench accuracy when video tokens are kept by *attention score* and the rest
+are masked out of attention.
 
-Most video tokens are unnecessary. This measures how MVBench accuracy holds up
-when, at a retention ratio rho, we keep only ``k = round(rho * tokens)`` video
-tokens per clip chosen *without looking at content*:
+This is an attention-oracle ceiling. For each clip we run one teacher forward and
+read the language->video attention (how much the post-video text tokens attend to
+each video token) at a band of critical decoder layers. At a retention ratio rho
+we keep the ``k = max(1, round(rho * tokens))`` highest-scoring video tokens and
+make the rest invisible to **every** decoder layer: their key columns in the
+additive attention mask are set to -inf from layer 0 onward, so no query -- and in
+particular not the answer token -- ever attends to them.
 
-  * random        -- k random tokens (chance baseline at the budget)
-  * uniform        -- k evenly-spaced tokens over the flattened (frame-major)
-                      sequence (a space-time diagonal sweep)
-  * uniform_strat  -- even per-frame quota of evenly-spaced spatial tokens
-                      (a uniform spatial grid replicated across frames)
-  * regvar         -- content-free regularly-varying (Pareto) per-frame budget
-                      drawn by inverse-transform sampling: the heavy-tailed shape
-                      of the Pareto-adaptive budget spent on arbitrary frames (the
-                      content-free null for adaptive budgeting; --rv_alpha sets the
-                      tail index)
-  * first / last   -- the first / last k tokens in order (the earliest / latest
-                      frames; prefix / suffix position baselines)
+Unlike FastV (which prunes the sequence at a layer K and so saves compute, but
+lets all tokens leak through layers 0..K first), the sequence length never changes
+and the dropped tokens are blocked at *all* depths. This isolates the one question
+"are these the right k tokens to keep?" -- a selection-quality ceiling, not a
+speedup. The scores themselves need the full forward, so this is not deployable;
+that is the point of a ceiling.
 
-Both reuse the model's native pre-LLM gating (``token_selection_mode``), so the
-decoder runs on a genuinely shorter sequence -- no scorer checkpoint required.
-The full (no-drop) model is reported as the reference, and ``--blind`` adds a
-text-only baseline (zero vision tokens, the model's language prior). Same data layout, frame
-sampling and option-letter logit readout as the experiment suite (one forward
-per sample, argmax over the option-letter tokens -- no autoregressive decoding).
+Selection is a global top-k by language->video attention: at each rho we keep the
+k highest-scoring video tokens and mask the rest.
 
-Setup (run once):
-    pip install -U "huggingface_hub[cli]" decord pillow
-    hf download OpenGVLab/MVBench --repo-type dataset --local-dir ~/MVBench
-    cd ~/MVBench/video && for z in $(find . -name '*.zip'); do unzip -n -q "$z"; done
+Self-contained single-forward MC eval on OpenGVLab/MVBench using the official
+mvbench.ipynb prompt (``Best option:(``; the next token is the option letter).
+Eager attention is required so attentions are returned and the additive 4D mask is
+materialized for the hooks to edit; the model's own pre-LLM gating stays off. The
+full (no-mask) model accuracy comes for free from the teacher forward.
 
 Example:
-    python inference.py \
-        --data_root ~/MVBench \
+    python mvbench_masked_baselines.py --data_root ~/MVBench \
         --model_name Qwen/Qwen2.5-VL-3B-Instruct \
-        --rhos 0.25 0.5 0.75 --baselines random uniform \
-        --tasks "Action Sequence" "Scene Transition"
+        --rhos 0.1 0.25 0.5 \
+        --score_layers 12 13 14 15 16 --tasks "Action Sequence" --official_sampling
 """
 
 from __future__ import annotations
@@ -81,15 +76,15 @@ SYSTEM_PROMPT = (
     "your observations, select the best option that accurately addresses the question."
 )
 
-TEMPORAL_PATCH_SIZE = 2  # Qwen2.5-VL pairs adjacent frames; the sampled count must be even.
+ANSWER_PROMPT = "Best option:("  # official mvbench.ipynb answer cue; the next token is the letter
 
 
 def frame_indices(bound, fps, max_frame, num_segments, first_idx=0):
-    """Frame indices for the frame-folder (tvqa) task, matching qwen_vl_utils."""
+    """Even-count frame indices for the frame-folder (tvqa) task."""
     start, end = (bound[0], bound[1]) if bound else (-1e5, 1e5)
     start_idx = max(first_idx, round(start * fps))
     end_idx = min(round(end * fps), max_frame)
-    n = max(TEMPORAL_PATCH_SIZE, round(num_segments / TEMPORAL_PATCH_SIZE) * TEMPORAL_PATCH_SIZE)
+    n = max(2, round(num_segments / 2) * 2)
     return np.linspace(start_idx, end_idx, n).round().astype(int)
 
 
@@ -119,13 +114,8 @@ def official_frames(path, data_type, has_bound, record, num_segments):
     return [Image.fromarray(f) for f in vr.get_batch(idxs).asnumpy()]
 
 
-def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels,
-                        fps, official=False, num_segments=16):
-    """Qwen chat prompt whose video item drives process_vision_info (the project sampler).
-
-    With ``official=True`` the video item is an explicit list of ``num_segments``
-    midpoint-sampled PIL frames (the reference mvbench.ipynb protocol) instead of
-    qwen_vl_utils fps sampling."""
+def make_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels, fps,
+                official=False, num_segments=16):
     if official:
         vid = {"type": "video", "video": official_frames(path, data_type, has_bound, record, num_segments)}
     elif data_type == "frame":
@@ -144,11 +134,11 @@ def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, ma
 
 
 def build_prompt(record):
-    """MVBench option block + the letters present, and the ground-truth index."""
+    """Official mvbench.ipynb prompt: system + question + lettered options. The
+    ``Best option:(`` answer cue is appended to the rendered chat in the loop."""
     letters = [chr(ord("A") + i) for i in range(len(record["candidates"]))]
     opts = "".join(f"({L}) {c}\n" for L, c in zip(letters, record["candidates"]))
-    text = (f"{SYSTEM_PROMPT}\nQuestion: {record['question']}\nOptions:\n{opts}"
-            "Answer with the option's letter (A, B, C, ...) directly.")
+    text = f"{SYSTEM_PROMPT}\nQuestion: {record['question']}\nOptions:\n{opts}"
     gt_idx = record["candidates"].index(record["answer"])
     return text, letters, gt_idx
 
@@ -168,55 +158,102 @@ def letter_token_ids(processor, letters):
 
 
 @torch.no_grad()
-def predict(model, inputs, letter_ids):
-    last = model(**inputs).logits[0, -1]
+def logits_to_pred(logits, letter_ids):
+    last = logits[0, -1]
     opt = [max(last[i].item() for i in ids) if ids else float("-inf") for ids in letter_ids]
     return int(np.argmax(opt))
 
 
-def video_text_counts(model, inputs):
-    ids = inputs["input_ids"][0]
-    n_video = int((ids == model.config.video_token_id).sum())
-    return n_video, int(ids.numel()) - n_video
+# --------------------------------------------------------------------------- #
+# Attention scoring (language -> video), replicating experiments/common.py
+# --------------------------------------------------------------------------- #
+def query_rows(input_ids, video_cols, source, device):
+    """Which query rows to aggregate attention over.
+
+    * "language" -- post-video text tokens (the paper's teacher signal): every
+                    non-video position after the video block (question/options/cue).
+    * "all"      -- every query row.
+    * "last"     -- only the final (answer-cue) position (FastV's last-token signal).
+    """
+    seq_len = input_ids.shape[0]
+    if source == "last":
+        return torch.tensor([seq_len - 1], device=device)
+    if source == "all":
+        return torch.arange(seq_len, device=device)
+    if source == "language":
+        last_vid = int(video_cols.max())
+        pos = torch.arange(seq_len, device=device)
+        is_video = torch.zeros(seq_len, dtype=torch.bool, device=device)
+        is_video[video_cols] = True
+        return pos[(pos > last_vid) & ~is_video]
+    raise ValueError(f"unknown attention source {source!r}")
 
 
-def kept_video_count(model, inputs, keep_ratio):
-    """Video tokens the gating keeps (deterministic: max(1, round(rho*tokens)) per clip)."""
-    n_video, _ = video_text_counts(model, inputs)
-    if keep_ratio is None:
-        return n_video
-    merge = model.config.vision_config.spatial_merge_size**2
-    kept = sum(max(1, round(keep_ratio * (int(row.prod()) // merge))) for row in inputs["video_grid_thw"])
-    return min(kept, n_video)
+def attention_scores(attentions, score_layers, rows, video_cols):
+    """One score per video token: language->video attention averaged over heads,
+    over the selected query rows, then over the requested layers. ``attentions`` is
+    the tuple of per-layer (B, heads, q, k) tensors from output_attentions=True."""
+    per_layer = []
+    for L in score_layers:
+        attn = attentions[L][0]               # (heads, q, k)
+        block = attn[:, rows][:, :, video_cols]  # (heads, |rows|, |vid|)
+        per_layer.append(block.mean(dim=0).mean(dim=0))  # (|vid|,)
+    return torch.stack(per_layer, dim=0).mean(dim=0).float()  # (n_video,)
+
+
+def select_topk(scores, k):
+    """Local indices of the k highest-scoring video tokens (sorted ascending)."""
+    idx = torch.topk(scores, k=min(k, scores.numel())).indices
+    return torch.sort(idx).values
+
+
+class KeyMasker:
+    """Mask given key columns out of attention in EVERY decoder layer.
+
+    For every layer, the dropped video-token columns of the additive 4D attention
+    mask are set to -inf, so no query at any depth (and hence not the answer token)
+    can attend to those tokens -- vision is restricted to the kept set throughout.
+    The sequence is never shortened: this measures selection quality, not speed.
+    Hooks are (de)registered per forward via the context-manager protocol."""
+
+    def __init__(self, layers, drop_cols):
+        self.layers = layers
+        self.drop_cols = drop_cols  # LongTensor of video-token sequence positions to block
+        self.handles = []
+
+    def _mask_hook(self, module, args, kwargs):
+        am = kwargs.get("attention_mask")
+        if am is None and len(args) >= 2:
+            am = args[1]
+        if torch.is_tensor(am):  # additive 4D float mask (eager): block the dropped columns
+            am[..., self.drop_cols] = torch.finfo(am.dtype).min
+
+    def __enter__(self):
+        for layer in self.layers:
+            self.handles.append(layer.register_forward_pre_hook(self._mask_hook, with_kwargs=True))
+        return self
+
+    def __exit__(self, *exc):
+        for h in self.handles:
+            h.remove()
+        self.handles.clear()
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Content-free video-token reduction baselines (random / uniform) on MVBench.")
+        description="MVBench accuracy when video tokens are kept by attention score and the rest "
+                    "are masked out of attention in every layer (attention-oracle selection ceiling).")
     p.add_argument("--data_root", required=True, help="Dir holding json/ and video/.")
     p.add_argument("--tasks", nargs="+", default=["all"], help="MVBench task names, or 'all'.")
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
-    p.add_argument("--rhos", type=float, nargs="+", default=[0.25, 0.5, 0.75],
+    p.add_argument("--rhos", type=float, nargs="+", default=[0.1, 0.25, 0.5],
                    help="Retention ratios: fraction of video tokens kept per clip.")
-    p.add_argument("--baselines", nargs="*", default=["random", "uniform", "uniform_strat"],
-                   choices=["random", "uniform", "uniform_strat", "regvar", "first", "last"],
-                   help="Content-free selection modes to run at each rho (same token budget). "
-                        "random = k random tokens; uniform = k evenly-spaced tokens over the "
-                        "flattened sequence; uniform_strat = even per-frame quota of evenly-spaced "
-                        "spatial tokens (a uniform grid replicated across frames); regvar = a "
-                        "regularly-varying (Pareto, --rv_alpha) per-frame budget via inverse-transform "
-                        "sampling, then evenly-spaced spatial tokens (content-free null for adaptive "
-                        "budgeting); first/last = the first/last k tokens in order (the earliest/latest "
-                        "frames -- prefix/suffix position baselines).")
-    p.add_argument("--seed", type=int, default=0,
-                   help="Seed for the random / regvar selection baselines.")
-    p.add_argument("--rv_alpha", type=float, default=2.0,
-                   help="Pareto tail index for the 'regvar' baseline (smaller = heavier tail / more "
-                        "concentrated per-frame budget).")
-    p.add_argument("--no_full", action="store_true", help="Skip the full-model (no-drop) reference.")
-    p.add_argument("--blind", action="store_true",
-                   help="Also run a text-only (no video) baseline: the question+options with ZERO "
-                        "vision tokens, measuring the model's language prior.")
+    p.add_argument("--score_layers", type=int, nargs="+", default=[12, 13, 14, 15, 16],
+                   help="Decoder layers whose language->video attention defines the score.")
+    p.add_argument("--score_source", default="language", choices=["language", "last", "all"],
+                   help="Query rows the attention is read from: language = post-video text tokens "
+                        "(paper signal); last = final answer-cue position; all = every row.")
+    p.add_argument("--no_full", action="store_true", help="Skip the full-model (no-mask) reference.")
     p.add_argument("--max_frames", type=int, default=16, help="upper cap on frames per clip.")
     p.add_argument("--fps", type=float, default=2.0, help="frames-per-second for video sampling.")
     p.add_argument("--official_sampling", action="store_true",
@@ -226,8 +263,7 @@ def main():
     p.add_argument("--max_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None, help="cap samples PER TASK (debug).")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
-    p.add_argument("--attn", default="sdpa", help="attn_implementation (sdpa/eager/flash_attention_2).")
-    p.add_argument("--out", default="results_mvbench_baselines.json", help="Path to dump metrics JSON.")
+    p.add_argument("--out", default="results_mvbench_attn_oracle.json", help="Path to dump metrics JSON.")
     args = p.parse_args()
 
     tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
@@ -235,36 +271,32 @@ def main():
     if unknown:
         raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
 
-    torch.manual_seed(args.seed)  # reproducible "random" selection
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
+    # eager attention guarantees returned attentions + a materialized additive 4D mask.
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        args.model_name, torch_dtype=dtype, device_map="auto", attn_implementation=args.attn).eval()
+        args.model_name, torch_dtype=dtype, device_map="auto", attn_implementation="eager").eval()
     processor = AutoProcessor.from_pretrained(args.model_name)
-    model.model.token_gating_rv_alpha = args.rv_alpha  # Pareto tail index for the regvar baseline
-    # No scorer checkpoint needed: random/uniform gating activates on token_selection_mode
-    # alone (token_scorer stays None); we just toggle keep_ratio + mode per setting.
+    layers = model.model.language_model.layers
+    video_token_id = model.config.video_token_id
+    n_layers = len(layers)
+    bad = [L for L in args.score_layers if not 0 <= L < n_layers]
+    if bad:
+        raise ValueError(f"score_layers {bad} out of range; model has {n_layers} layers (0..{n_layers - 1}).")
 
-    # (column name, rho, selection mode). full = no dropping; blind = no video tokens
-    # at all (text-only); then each rho x baseline.
-    label = {"random": "rand", "uniform": "unif", "uniform_strat": "ustr", "regvar": "rvar",
-             "first": "frst", "last": "last"}
-    settings = [] if args.no_full else [("full", None, None)]
-    if args.blind:
-        settings.append(("blind", None, "blind"))
+    # (column name, rho). 'full' = no masking; then attn top-k at each rho.
+    settings = [] if args.no_full else [("full", None)]
     for r in args.rhos:
-        for b in args.baselines:
-            settings.append((f"{label[b]}@{r}", r, b))   # e.g. rand@0.25, ustr@0.25
-    col = [name for name, _, _ in settings]
-    need_video = any(m != "blind" for _, _, m in settings)
+        settings.append((f"attn@{r}", r))   # e.g. attn@0.25
+    col = [name for name, _ in settings]
 
     correct = {t: {c: 0 for c in col} for t in tasks}
     seen = {t: 0 for t in tasks}
     kept_vid = {c: 0 for c in col}
     vid_total = 0
-    n = 0
 
     json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
     video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
+    n = 0
 
     for task in tasks:
         fname, subdir, data_type, has_bound = DATA_LIST[task]
@@ -277,38 +309,51 @@ def main():
             try:
                 path = os.path.join(video_dir, subdir, rec["video"])
                 text, letters, gt_idx = build_prompt(rec)
+                prompt = make_prompt(path, data_type, has_bound, rec, text,
+                                     args.max_frames, args.max_pixels, args.fps,
+                                     official=args.official_sampling, num_segments=args.num_segments)
+                # append the official answer cue so the next token is the option letter
+                chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) + ANSWER_PROMPT
+                imgs, vids = process_vision_info(prompt)
+                inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
                 letter_ids = letter_token_ids(processor, letters)
-                inputs = None
-                if need_video:
-                    prompt = make_mvbench_prompt(path, data_type, has_bound, rec, text,
-                                                 args.max_frames, args.max_pixels, args.fps,
-                                                 official=args.official_sampling,
-                                                 num_segments=args.num_segments)
-                    chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
-                    imgs, vids = process_vision_info(prompt)
-                    inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
-                blind_inputs = None
-                if args.blind:  # text-only prompt: same question/options, no video item
-                    bmsg = [{"role": "user", "content": [{"type": "text", "text": text}]}]
-                    bchat = processor.apply_chat_template(bmsg, tokenize=False, add_generation_prompt=True)
-                    blind_inputs = processor(text=[bchat], return_tensors="pt").to(model.device)
+                video_cols = (inputs["input_ids"][0] == video_token_id).nonzero(as_tuple=False).flatten()
+                if video_cols.numel() == 0:
+                    tqdm.write(f"skip [{task}] {rec.get('video')}: no video tokens")
+                    continue
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")
                 continue
 
-            if need_video:
-                vid_total += video_text_counts(model, inputs)[0]
+            n_video = video_cols.numel()
+            n_frames = int(inputs["video_grid_thw"][0][0].item())
+            vid_total += n_video
+            device = video_cols.device
+
+            # Teacher forward: full-model logits (no-mask reference) + attentions for scoring.
+            with torch.no_grad():
+                out = model(**inputs, output_attentions=need_scores, use_cache=False)
+            full_logits = out.logits
+            scores = None
+            if need_scores:
+                rows = query_rows(inputs["input_ids"][0], video_cols, args.score_source, device)
+                scores = attention_scores(out.attentions, args.score_layers, rows, video_cols)
+            del out  # free the attention tensors before the masked forwards
+
             for name, rho, mode in settings:
-                if mode == "blind":  # no video tokens at all -- language prior
-                    correct[task][name] += int(predict(model, blind_inputs, letter_ids) == gt_idx)
+                if rho is None:  # full model -- reuse the teacher forward
+                    correct[task][name] += int(logits_to_pred(full_logits, letter_ids) == gt_idx)
+                    kept_vid[name] += n_video
                     continue
-                if rho is None:
-                    model.model.disable_token_gating()
-                else:
-                    model.model.token_keep_ratio = rho
-                    model.model.token_selection_mode = mode
-                correct[task][name] += int(predict(model, inputs, letter_ids) == gt_idx)
-                kept_vid[name] += kept_video_count(model, inputs, rho)
+                k = min(n_video, max(1, int(round(rho * n_video))))
+                local = kept_local_indices(mode, scores, k, n_frames, device)
+                keep = torch.zeros(n_video, dtype=torch.bool, device=device)
+                keep[local] = True
+                drop_cols = video_cols[~keep]
+                with torch.no_grad(), KeyMasker(layers, drop_cols):
+                    logits = model(**inputs, use_cache=False).logits
+                correct[task][name] += int(logits_to_pred(logits, letter_ids) == gt_idx)
+                kept_vid[name] += int(keep.sum())
             seen[task] += 1
             n += 1
 
@@ -337,7 +382,9 @@ def main():
         print(f"{name:<10}{setting_mean[name]:>9.4f}{vid_pct:>7.1f}%{kept_vid[name] / n:>9.0f}")
 
     result = {
-        "experiment": "mvbench_content_free_baselines",
+        "experiment": "mvbench_attention_oracle_masked",
+        "method": "keep top-k video tokens by language->video attention; mask the rest out of "
+                  "attention in every layer (selection-quality ceiling)",
         "model_name": args.model_name,
         "data_root": args.data_root,
         "sampling": ("official" if args.official_sampling else "fps"),
@@ -346,7 +393,8 @@ def main():
         "max_frames": args.max_frames,
         "rhos": args.rhos,
         "baselines": args.baselines,
-        "rv_alpha": args.rv_alpha,
+        "score_layers": args.score_layers,
+        "score_source": args.score_source,
         "seed": args.seed,
         "settings": col,
         "tasks": valid,

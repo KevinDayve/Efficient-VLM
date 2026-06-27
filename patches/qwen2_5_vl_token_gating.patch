@@ -1,8 +1,8 @@
 diff --git a/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py b/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
-index 45e1f23b56..e01d82f29d 100644
+index 45e1f23b56..a7688991be 100644
 --- a/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
 +++ b/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
-@@ -879,6 +879,115 @@ class Qwen2_5_VLTextModel(Qwen2_5_VLPreTrainedModel):
+@@ -879,6 +879,167 @@ class Qwen2_5_VLTextModel(Qwen2_5_VLPreTrainedModel):
          )
  
  
@@ -115,10 +115,62 @@ index 45e1f23b56..e01d82f29d 100644
 +    return torch.sort(torch.cat(kept)).values
 +
 +
++def _select_regvar_temporal(n_video: int, k: int, n_frames: int, alpha: float, device) -> torch.Tensor:
++    """Indices (sorted ascending) of the video tokens kept under a *content-free*
++    regularly-varying per-frame budget.
++
++    The content-free null for Pareto-adaptive budgeting: it reproduces the
++    heavy-tailed *shape* of the per-frame budget but assigns it to ARBITRARY
++    frames (no scores). Per-frame token counts are drawn from a Pareto(``alpha``)
++    law by inverse-transform sampling -- ``x = (1 - u) ** (-1 / alpha)`` with
++    ``u ~ U(0, 1)`` (a regularly varying tail, ``P(X > x) ~ x ** -alpha``) --
++    then normalized to weights and allocated to sum to exactly ``k`` (largest
++    remainder, capped at the per-frame token count with redistribution). Within
++    each frame, evenly-spaced spatial tokens are kept. Randomness uses the global
++    RNG (seed it with ``torch.manual_seed`` for reproducibility, like the
++    ``random`` baseline). Falls back to global uniform when the tokens do not
++    divide evenly into ``n_frames`` temporal bins."""
++    k = int(min(k, n_video))
++    if n_frames <= 0 or n_video % n_frames != 0:
++        return (torch.arange(k, device=device) * n_video) // k
++    T = n_frames
++    N = n_video // T
++    u = torch.rand(T, device=device)
++    x = (1.0 - u).clamp_min(1e-12).pow(-1.0 / alpha)  # Pareto(alpha) inverse-CDF
++    w = x / x.sum().clamp_min(1e-12)
++    frac = k * w
++    k_t = frac.floor().long()
++    deficit = k - int(k_t.sum().item())
++    if deficit > 0:
++        top = torch.topk(frac - frac.floor(), min(deficit, T)).indices
++        k_t[top] += 1
++    k_t = k_t.clamp(max=N)
++    while True:  # redistribute any budget lost to the per-frame cap
++        short = k - int(k_t.sum().item())
++        if short <= 0:
++            break
++        cand = torch.where(k_t < N)[0]
++        if cand.numel() == 0:
++            break
++        order = cand[torch.argsort(w[cand], descending=True)]
++        k_t[order[:short]] += 1
++    kept = []
++    for t in range(T):
++        bt = int(k_t[t].item())
++        if bt == 0:
++            continue
++        offset = t * N
++        local = (torch.arange(bt, device=device) * N) // bt  # evenly-spaced spatial
++        kept.append(local + offset)
++    if not kept:
++        return (torch.arange(k, device=device) * n_video) // k
++    return torch.sort(torch.cat(kept)).values
++
++
  @auto_docstring
  class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
      base_model_prefix = "model"
-@@ -892,10 +1001,124 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
+@@ -892,10 +1053,172 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
          self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
          self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
          self.rope_deltas = None  # cache rope_deltas here
@@ -128,6 +180,11 @@ index 45e1f23b56..e01d82f29d 100644
 +        self.token_gating_k_min = 1
 +        self.token_gating_temp = 1.0
 +        self.token_gating_beta_max = 3.0
++        self.token_gating_rv_alpha = 2.0  # Pareto tail index for the "regvar" baseline
++        # Which tokens to keep at the chosen budget: "scorer" (learned, the default),
++        # or the content-free baselines "random" / "uniform". Same budget k either
++        # way, so accuracy differences isolate *which* tokens the scorer picks.
++        self.token_selection_mode = "scorer"
  
          # Initialize weights and apply final processing
          self.post_init()
@@ -205,24 +262,67 @@ index 45e1f23b56..e01d82f29d 100644
 +        if vid_pos.numel() == 0:
 +            return inputs_embeds, position_ids, attention_mask
 +
-+        scorer = self.token_scorer.to(video_embeds.device)
-+        scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
++        mode = self.token_selection_mode
++        if mode == "scorer":
++            scorer = self.token_scorer.to(video_embeds.device)
++            scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
 +
-+        # Per-video stratified selection (a single sequence may pack several clips).
++        # Per-video selection at the chosen budget (a single sequence may pack several clips).
 +        merge = self.config.vision_config.spatial_merge_size**2
 +        kept_local, start = [], 0
 +        for thw in video_grid_thw:
 +            t = int(thw[0].item())
 +            chunk = int(thw.prod().item()) // merge
 +            k = max(1, int(round(self.token_keep_ratio * chunk)))
-+            idx = _select_pareto_stratified(
-+                scores_all[start : start + chunk],
-+                k,
-+                t,
-+                k_min=self.token_gating_k_min,
-+                temp=self.token_gating_temp,
-+                beta_max=self.token_gating_beta_max,
-+            )
++            if mode == "random":
++                # Keep k random tokens (content-free chance baseline at the same budget).
++                idx = torch.randperm(chunk, device=device)[:k]
++            elif mode == "uniform":
++                # Keep k evenly-spaced tokens -- spreads across frames and space without
++                # looking at content. arange(k)*chunk//k gives exactly k distinct indices.
++                idx = (torch.arange(k, device=device) * chunk) // k
++            elif mode == "uniform_strat":
++                # Stratified uniform: enforce an even per-FRAME quota (~k/t tokens per
++                # frame), then pick evenly-spaced spatial tokens within each frame. Unlike
++                # "uniform" (one global stride over the frame-major sequence, whose spatial
++                # position drifts frame to frame) this lands a uniform spatial grid that is
++                # replicated across frames. Falls back to global uniform if the tokens do
++                # not divide evenly into t temporal bins.
++                if t > 0 and chunk % t == 0:
++                    n_spatial = chunk // t
++                    base, rem = divmod(k, t)  # spread the remainder over the first frames
++                    picks = []
++                    for f in range(t):
++                        bf = base + (1 if f < rem else 0)
++                        if bf:
++                            picks.append((torch.arange(bf, device=device) * n_spatial) // bf + f * n_spatial)
++                    idx = torch.cat(picks)
++                else:
++                    idx = (torch.arange(k, device=device) * chunk) // k
++            elif mode == "first":
++                # Keep the first k tokens in sequence order (frame-major) -- i.e. the
++                # earliest frames in full, no spread. A position/prefix baseline.
++                idx = torch.arange(k, device=device)
++            elif mode == "last":
++                # Keep the last k tokens in sequence order -- i.e. the latest frames in
++                # full, no spread. The suffix counterpart of "first".
++                idx = torch.arange(chunk - k, chunk, device=device)
++            elif mode == "regvar":
++                # Content-free regularly-varying (Pareto) per-frame budget via inverse-
++                # transform sampling: the heavy-tailed *shape* of the Pareto-adaptive
++                # budget, but spent on ARBITRARY frames (no content). The null that
++                # isolates whether the scorer's gain is the tail shape itself or *which*
++                # frames get the budget; evenly-spaced spatial tokens within each frame.
++                idx = _select_regvar_temporal(chunk, k, t, self.token_gating_rv_alpha, device)
++            else:
++                idx = _select_pareto_stratified(
++                    scores_all[start : start + chunk],
++                    k,
++                    t,
++                    k_min=self.token_gating_k_min,
++                    temp=self.token_gating_temp,
++                    beta_max=self.token_gating_beta_max,
++                )
 +            kept_local.append(idx + start)
 +            start += chunk
 +        kept_local = torch.cat(kept_local)
@@ -243,14 +343,18 @@ index 45e1f23b56..e01d82f29d 100644
      def get_vision_position_ids(
          self,
          start_position: int,
-@@ -1264,6 +1487,14 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
+@@ -1264,6 +1587,18 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                  mm_token_type_ids=mm_token_type_ids,
              )
  
 +        # Learned video-token gating: drop low-scoring video tokens before the LLM
 +        # (only on the prefill, where pixel_values_videos and the merged
 +        # video_embeds/video_mask are available).
-+        if self.token_keep_ratio is not None and self.token_scorer is not None and pixel_values_videos is not None:
++        if (
++            self.token_keep_ratio is not None
++            and pixel_values_videos is not None
++            and (self.token_scorer is not None or self.token_selection_mode != "scorer")
++        ):
 +            inputs_embeds, position_ids, attention_mask = self._gate_video_tokens(
 +                inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
 +            )
@@ -258,7 +362,7 @@ index 45e1f23b56..e01d82f29d 100644
          outputs = self.language_model(
              input_ids=None,
              position_ids=position_ids,
-@@ -1307,6 +1538,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2_5_VLPreTrainedModel, GenerationMi
+@@ -1307,6 +1642,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2_5_VLPreTrainedModel, GenerationMi
  
          self.post_init()
  
@@ -277,10 +381,10 @@ index 45e1f23b56..e01d82f29d 100644
      def get_video_features(
          self,
 diff --git a/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py b/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
-index 0c0ada0eaa..112772854b 100644
+index 0c0ada0eaa..ca84f06258 100644
 --- a/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
 +++ b/src/transformers/models/qwen2_5_vl/modular_qwen2_5_vl.py
-@@ -304,6 +304,115 @@ class Qwen2_5_VLModelOutputWithPast(Qwen2VLModelOutputWithPast):
+@@ -304,6 +304,167 @@ class Qwen2_5_VLModelOutputWithPast(Qwen2VLModelOutputWithPast):
      pass
  
  
@@ -393,10 +497,62 @@ index 0c0ada0eaa..112772854b 100644
 +    return torch.sort(torch.cat(kept)).values
 +
 +
++def _select_regvar_temporal(n_video: int, k: int, n_frames: int, alpha: float, device) -> torch.Tensor:
++    """Indices (sorted ascending) of the video tokens kept under a *content-free*
++    regularly-varying per-frame budget.
++
++    The content-free null for Pareto-adaptive budgeting: it reproduces the
++    heavy-tailed *shape* of the per-frame budget but assigns it to ARBITRARY
++    frames (no scores). Per-frame token counts are drawn from a Pareto(``alpha``)
++    law by inverse-transform sampling -- ``x = (1 - u) ** (-1 / alpha)`` with
++    ``u ~ U(0, 1)`` (a regularly varying tail, ``P(X > x) ~ x ** -alpha``) --
++    then normalized to weights and allocated to sum to exactly ``k`` (largest
++    remainder, capped at the per-frame token count with redistribution). Within
++    each frame, evenly-spaced spatial tokens are kept. Randomness uses the global
++    RNG (seed it with ``torch.manual_seed`` for reproducibility, like the
++    ``random`` baseline). Falls back to global uniform when the tokens do not
++    divide evenly into ``n_frames`` temporal bins."""
++    k = int(min(k, n_video))
++    if n_frames <= 0 or n_video % n_frames != 0:
++        return (torch.arange(k, device=device) * n_video) // k
++    T = n_frames
++    N = n_video // T
++    u = torch.rand(T, device=device)
++    x = (1.0 - u).clamp_min(1e-12).pow(-1.0 / alpha)  # Pareto(alpha) inverse-CDF
++    w = x / x.sum().clamp_min(1e-12)
++    frac = k * w
++    k_t = frac.floor().long()
++    deficit = k - int(k_t.sum().item())
++    if deficit > 0:
++        top = torch.topk(frac - frac.floor(), min(deficit, T)).indices
++        k_t[top] += 1
++    k_t = k_t.clamp(max=N)
++    while True:  # redistribute any budget lost to the per-frame cap
++        short = k - int(k_t.sum().item())
++        if short <= 0:
++            break
++        cand = torch.where(k_t < N)[0]
++        if cand.numel() == 0:
++            break
++        order = cand[torch.argsort(w[cand], descending=True)]
++        k_t[order[:short]] += 1
++    kept = []
++    for t in range(T):
++        bt = int(k_t[t].item())
++        if bt == 0:
++            continue
++        offset = t * N
++        local = (torch.arange(bt, device=device) * N) // bt  # evenly-spaced spatial
++        kept.append(local + offset)
++    if not kept:
++        return (torch.arange(k, device=device) * n_video) // k
++    return torch.sort(torch.cat(kept)).values
++
++
  class Qwen2_5_VLModel(Qwen2VLModel):
      config: Qwen2_5_VLConfig
      base_model_prefix = "model"
-@@ -314,6 +423,120 @@ class Qwen2_5_VLModel(Qwen2VLModel):
+@@ -314,6 +475,168 @@ class Qwen2_5_VLModel(Qwen2VLModel):
      def __init__(self, config):
          super().__init__(config)
          self.visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
@@ -406,6 +562,11 @@ index 0c0ada0eaa..112772854b 100644
 +        self.token_gating_k_min = 1
 +        self.token_gating_temp = 1.0
 +        self.token_gating_beta_max = 3.0
++        self.token_gating_rv_alpha = 2.0  # Pareto tail index for the "regvar" baseline
++        # Which tokens to keep at the chosen budget: "scorer" (learned, the default),
++        # or the content-free baselines "random" / "uniform". Same budget k either
++        # way, so accuracy differences isolate *which* tokens the scorer picks.
++        self.token_selection_mode = "scorer"
 +
 +    def load_token_scorer(
 +        self,
@@ -480,24 +641,67 @@ index 0c0ada0eaa..112772854b 100644
 +        if vid_pos.numel() == 0:
 +            return inputs_embeds, position_ids, attention_mask
 +
-+        scorer = self.token_scorer.to(video_embeds.device)
-+        scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
++        mode = self.token_selection_mode
++        if mode == "scorer":
++            scorer = self.token_scorer.to(video_embeds.device)
++            scores_all = scorer(video_embeds.to(next(scorer.parameters()).dtype)).flatten()  # (n_video,)
 +
-+        # Per-video stratified selection (a single sequence may pack several clips).
++        # Per-video selection at the chosen budget (a single sequence may pack several clips).
 +        merge = self.config.vision_config.spatial_merge_size**2
 +        kept_local, start = [], 0
 +        for thw in video_grid_thw:
 +            t = int(thw[0].item())
 +            chunk = int(thw.prod().item()) // merge
 +            k = max(1, int(round(self.token_keep_ratio * chunk)))
-+            idx = _select_pareto_stratified(
-+                scores_all[start : start + chunk],
-+                k,
-+                t,
-+                k_min=self.token_gating_k_min,
-+                temp=self.token_gating_temp,
-+                beta_max=self.token_gating_beta_max,
-+            )
++            if mode == "random":
++                # Keep k random tokens (content-free chance baseline at the same budget).
++                idx = torch.randperm(chunk, device=device)[:k]
++            elif mode == "uniform":
++                # Keep k evenly-spaced tokens -- spreads across frames and space without
++                # looking at content. arange(k)*chunk//k gives exactly k distinct indices.
++                idx = (torch.arange(k, device=device) * chunk) // k
++            elif mode == "uniform_strat":
++                # Stratified uniform: enforce an even per-FRAME quota (~k/t tokens per
++                # frame), then pick evenly-spaced spatial tokens within each frame. Unlike
++                # "uniform" (one global stride over the frame-major sequence, whose spatial
++                # position drifts frame to frame) this lands a uniform spatial grid that is
++                # replicated across frames. Falls back to global uniform if the tokens do
++                # not divide evenly into t temporal bins.
++                if t > 0 and chunk % t == 0:
++                    n_spatial = chunk // t
++                    base, rem = divmod(k, t)  # spread the remainder over the first frames
++                    picks = []
++                    for f in range(t):
++                        bf = base + (1 if f < rem else 0)
++                        if bf:
++                            picks.append((torch.arange(bf, device=device) * n_spatial) // bf + f * n_spatial)
++                    idx = torch.cat(picks)
++                else:
++                    idx = (torch.arange(k, device=device) * chunk) // k
++            elif mode == "first":
++                # Keep the first k tokens in sequence order (frame-major) -- i.e. the
++                # earliest frames in full, no spread. A position/prefix baseline.
++                idx = torch.arange(k, device=device)
++            elif mode == "last":
++                # Keep the last k tokens in sequence order -- i.e. the latest frames in
++                # full, no spread. The suffix counterpart of "first".
++                idx = torch.arange(chunk - k, chunk, device=device)
++            elif mode == "regvar":
++                # Content-free regularly-varying (Pareto) per-frame budget via inverse-
++                # transform sampling: the heavy-tailed *shape* of the Pareto-adaptive
++                # budget, but spent on ARBITRARY frames (no content). The null that
++                # isolates whether the scorer's gain is the tail shape itself or *which*
++                # frames get the budget; evenly-spaced spatial tokens within each frame.
++                idx = _select_regvar_temporal(chunk, k, t, self.token_gating_rv_alpha, device)
++            else:
++                idx = _select_pareto_stratified(
++                    scores_all[start : start + chunk],
++                    k,
++                    t,
++                    k_min=self.token_gating_k_min,
++                    temp=self.token_gating_temp,
++                    beta_max=self.token_gating_beta_max,
++                )
 +            kept_local.append(idx + start)
 +            start += chunk
 +        kept_local = torch.cat(kept_local)
@@ -517,14 +721,18 @@ index 0c0ada0eaa..112772854b 100644
  
      def get_rope_index(
          self,
-@@ -535,6 +758,14 @@ class Qwen2_5_VLModel(Qwen2VLModel):
+@@ -535,6 +858,18 @@ class Qwen2_5_VLModel(Qwen2VLModel):
                  mm_token_type_ids=mm_token_type_ids,
              )
  
 +        # Learned video-token gating: drop low-scoring video tokens before the LLM
 +        # (only on the prefill, where pixel_values_videos and the merged
 +        # video_embeds/video_mask are available).
-+        if self.token_keep_ratio is not None and self.token_scorer is not None and pixel_values_videos is not None:
++        if (
++            self.token_keep_ratio is not None
++            and pixel_values_videos is not None
++            and (self.token_scorer is not None or self.token_selection_mode != "scorer")
++        ):
 +            inputs_embeds, position_ids, attention_mask = self._gate_video_tokens(
 +                inputs_embeds, position_ids, attention_mask, video_embeds, video_mask, video_grid_thw
 +            )
@@ -532,7 +740,7 @@ index 0c0ada0eaa..112772854b 100644
          outputs = self.language_model(
              input_ids=None,
              position_ids=position_ids,
-@@ -562,6 +793,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2VLForConditionalGeneration):
+@@ -562,6 +897,17 @@ class Qwen2_5_VLForConditionalGeneration(Qwen2VLForConditionalGeneration):
      # Reference: fix gemma3 grad acc #37208
      accepts_loss_kwargs = False
  
