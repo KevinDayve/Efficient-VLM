@@ -455,7 +455,7 @@ def parse_args():
     arguments.add_argument("--val_ratios", type=float, nargs="+", default=[0.25, 0.5, 0.75], help='Retention ratios at which to report top-k recall / NDCG@k during validation.')
     arguments.add_argument("--best_metric", type=str, default="recall@25", help="Validation metric for the best checkpoint, without the 'val/' prefix (e.g. recall@25, sel_recall@25, spearman_rho). Must correspond to a logged metric.")
     arguments.add_argument("--grad_accum", type=int, default=1, help='Accumulate gradients over this many samples per optimiser step (effective batch size). Reduces gradient noise vs the default bs=1.')
-    arguments.add_argument("--hidden_dim", type=int, default=256, help='The hidden dimension of the scorer module.')
+    arguments.add_argument("--hidden_dim", type=int, default=512, help='The hidden dimension of the scorer module.')
     arguments.add_argument("--layers", type=int, nargs="+", default=[12, 13, 14, 15, 16], help="The layers from which to extract the attention scores.")
     arguments.add_argument("--learning_rate", type=float, default=1e-4, help='The learning rate for the optimiser module.')
     arguments.add_argument("--weight_decay", type=float, default=1e-2, help='The weight decay for the optimiser module.')

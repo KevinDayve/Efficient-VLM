@@ -228,6 +228,9 @@ def main():
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
     p.add_argument("--attn", default="sdpa", help="attn_implementation (sdpa/eager/flash_attention_2).")
     p.add_argument("--out", default="results_mvbench_baselines.json", help="Path to dump metrics JSON.")
+    p.add_argument("--responses_out", default=None,
+                   help="Optional path to dump per-sample responses JSON (predicted option per "
+                        "setting, ground truth, correctness). Defaults to <out>_responses.json.")
     args = p.parse_args()
 
     tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
@@ -262,6 +265,7 @@ def main():
     kept_vid = {c: 0 for c in col}
     vid_total = 0
     n = 0
+    responses = []  # per-sample predictions for every setting
 
     json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
     video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
@@ -298,17 +302,34 @@ def main():
 
             if need_video:
                 vid_total += video_text_counts(model, inputs)[0]
+            preds = {}  # setting -> predicted option index for this sample
             for name, rho, mode in settings:
                 if mode == "blind":  # no video tokens at all -- language prior
-                    correct[task][name] += int(predict(model, blind_inputs, letter_ids) == gt_idx)
+                    preds[name] = predict(model, blind_inputs, letter_ids)
+                    correct[task][name] += int(preds[name] == gt_idx)
                     continue
                 if rho is None:
                     model.model.disable_token_gating()
                 else:
                     model.model.token_keep_ratio = rho
                     model.model.token_selection_mode = mode
-                correct[task][name] += int(predict(model, inputs, letter_ids) == gt_idx)
+                preds[name] = predict(model, inputs, letter_ids)
+                correct[task][name] += int(preds[name] == gt_idx)
                 kept_vid[name] += kept_video_count(model, inputs, rho)
+            responses.append({
+                "task": task,
+                "video": rec.get("video"),
+                "question": rec["question"],
+                "candidates": rec["candidates"],
+                "answer": rec["answer"],
+                "gt_letter": letters[gt_idx],
+                "predictions": {
+                    name: {"letter": letters[preds[name]],
+                           "text": rec["candidates"][preds[name]],
+                           "correct": preds[name] == gt_idx}
+                    for name in col
+                },
+            })
             seen[task] += 1
             n += 1
 
@@ -365,6 +386,16 @@ def main():
     with open(args.out, "w") as fh:
         json.dump(result, fh, indent=2)
     print(f"\nSaved -> {args.out}")
+
+    resp_out = args.responses_out or f"{os.path.splitext(args.out)[0]}_responses.json"
+    with open(resp_out, "w") as fh:
+        json.dump({
+            "model_name": args.model_name,
+            "settings": col,
+            "n_evaluated": n,
+            "responses": responses,
+        }, fh, indent=2)
+    print(f"Saved responses ({len(responses)}) -> {resp_out}")
 
 
 if __name__ == "__main__":
