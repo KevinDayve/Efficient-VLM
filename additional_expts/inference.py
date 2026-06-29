@@ -81,6 +81,10 @@ SYSTEM_PROMPT = (
     "your observations, select the best option that accurately addresses the question."
 )
 
+# Official mvbench.ipynb forces the answer with this assistant-turn prefix; the very next
+# token is the option letter, so the logit readout still works (no generate+parse needed).
+ANSWER_PREFIX = "Best option:("
+
 TEMPORAL_PATCH_SIZE = 2  # Qwen2.5-VL pairs adjacent frames; the sampled count must be even.
 
 
@@ -144,11 +148,15 @@ def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, ma
 
 
 def build_prompt(record):
-    """MVBench option block + the letters present, and the ground-truth index."""
+    """MVBench option block + the letters present, and the ground-truth index.
+
+    Matches the reference mvbench.ipynb user turn exactly: the options block is rstripped
+    and followed by ``Only give the best option.`` (the answer is then forced by the
+    ``ANSWER_PREFIX`` assistant prefix at chat-build time)."""
     letters = [chr(ord("A") + i) for i in range(len(record["candidates"]))]
     opts = "".join(f"({L}) {c}\n" for L, c in zip(letters, record["candidates"]))
-    text = (f"{SYSTEM_PROMPT}\nQuestion: {record['question']}\nOptions:\n{opts}"
-            "Answer with the option's letter (A, B, C, ...) directly.")
+    text = (f"{SYSTEM_PROMPT}\nQuestion: {record['question']}\nOptions:\n{opts.rstrip()}"
+            "\nOnly give the best option.")
     gt_idx = record["candidates"].index(record["answer"])
     return text, letters, gt_idx
 
@@ -289,12 +297,14 @@ def main():
                                                  official=args.official_sampling,
                                                  num_segments=args.num_segments)
                     chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+                    chat += ANSWER_PREFIX  # force the answer; the option letter is the next token after '('
                     imgs, vids = process_vision_info(prompt)
                     inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
                 blind_inputs = None
                 if args.blind:  # text-only prompt: same question/options, no video item
                     bmsg = [{"role": "user", "content": [{"type": "text", "text": text}]}]
                     bchat = processor.apply_chat_template(bmsg, tokenize=False, add_generation_prompt=True)
+                    bchat += ANSWER_PREFIX
                     blind_inputs = processor(text=[bchat], return_tensors="pt").to(model.device)
             except Exception as e:  # missing/corrupt clip -> skip
                 tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")
