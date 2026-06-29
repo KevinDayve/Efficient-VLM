@@ -1,0 +1,173 @@
+{
+  "experiment": "mvbench_inference_only_selection",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/MVBench/",
+  "sampling": "fps",
+  "num_frames": null,
+  "fps": 2.0,
+  "max_frames": 16,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "attn_layers": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "it_temp": 1.0,
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 200,
+  "full_accuracy_mean": 0.71,
+  "full_accuracy_micro": 0.71,
+  "per_task_seen": {
+    "Action Sequence": 200
+  },
+  "full_per_task": {
+    "Action Sequence": 0.71
+  },
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy_mean": 0.45,
+        "accuracy_micro": 0.45,
+        "dispersion": 0.5023147980987267,
+        "per_task": {
+          "Action Sequence": 0.45
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.535,
+        "accuracy_micro": 0.535,
+        "dispersion": 0.5020352177208358,
+        "per_task": {
+          "Action Sequence": 0.535
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.605,
+        "accuracy_micro": 0.605,
+        "dispersion": 0.5033149960466313,
+        "per_task": {
+          "Action Sequence": 0.605
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.705,
+        "accuracy_micro": 0.705,
+        "dispersion": 0.5029798169575812,
+        "per_task": {
+          "Action Sequence": 0.705
+        }
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy_mean": 0.32,
+        "accuracy_micro": 0.32,
+        "dispersion": 0.5,
+        "per_task": {
+          "Action Sequence": 0.32
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.525,
+        "accuracy_micro": 0.525,
+        "dispersion": 0.5283141025641025,
+        "per_task": {
+          "Action Sequence": 0.525
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.565,
+        "accuracy_micro": 0.565,
+        "dispersion": 0.5211385174699251,
+        "per_task": {
+          "Action Sequence": 0.565
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.655,
+        "accuracy_micro": 0.655,
+        "dispersion": 0.5040784899480552,
+        "per_task": {
+          "Action Sequence": 0.655
+        }
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy_mean": 0.285,
+        "accuracy_micro": 0.285,
+        "dispersion": 0.14519156719291493,
+        "per_task": {
+          "Action Sequence": 0.285
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.54,
+        "accuracy_micro": 0.54,
+        "dispersion": 0.5373631164222682,
+        "per_task": {
+          "Action Sequence": 0.54
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.655,
+        "accuracy_micro": 0.655,
+        "dispersion": 0.5354643922405168,
+        "per_task": {
+          "Action Sequence": 0.655
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.69,
+        "accuracy_micro": 0.69,
+        "dispersion": 0.5163722767866269,
+        "per_task": {
+          "Action Sequence": 0.69
+        }
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy_mean": 0.39,
+        "accuracy_micro": 0.39,
+        "dispersion": 0.4905901039661147,
+        "per_task": {
+          "Action Sequence": 0.39
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.545,
+        "accuracy_micro": 0.545,
+        "dispersion": 0.5042109098738563,
+        "per_task": {
+          "Action Sequence": 0.545
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.6,
+        "accuracy_micro": 0.6,
+        "dispersion": 0.5047964487628634,
+        "per_task": {
+          "Action Sequence": 0.6
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.675,
+        "accuracy_micro": 0.675,
+        "dispersion": 0.5030379848175637,
+        "per_task": {
+          "Action Sequence": 0.675
+        }
+      }
+    }
+  }
+}

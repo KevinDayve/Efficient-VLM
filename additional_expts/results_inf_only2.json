@@ -1,0 +1,58 @@
+{
+  "n": 500,
+  "full_accuracy": 0.734,
+  "rhos": [
+    0.01,
+    0.05
+  ],
+  "attn_layers": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "it_temp": 0.5,
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy": 0.626,
+        "dispersion": 0.5047872102315674
+      },
+      "0.05": {
+        "accuracy": 0.68,
+        "dispersion": 0.5041281219521963
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy": 0.554,
+        "dispersion": 0.8660379303236447
+      },
+      "0.05": {
+        "accuracy": 0.64,
+        "dispersion": 0.536488783068783
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy": 0.5,
+        "dispersion": 0.11405251494537208
+      },
+      "0.05": {
+        "accuracy": 0.71,
+        "dispersion": 0.5216698605098604
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy": 0.632,
+        "dispersion": 0.4985776128633272
+      },
+      "0.05": {
+        "accuracy": 0.7,
+        "dispersion": 0.5041632067700818
+      }
+    }
+  }
+}

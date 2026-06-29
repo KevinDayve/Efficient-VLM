@@ -1,0 +1,326 @@
+{
+  "experiment": "A_layer_localization",
+  "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "n_evaluated": 400,
+  "window_size": 3,
+  "baseline_accuracy": 0.19,
+  "curve": [
+    {
+      "window": [
+        0,
+        1,
+        2
+      ],
+      "center_layer": 1.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        1,
+        2,
+        3
+      ],
+      "center_layer": 2.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        2,
+        3,
+        4
+      ],
+      "center_layer": 3.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        3,
+        4,
+        5
+      ],
+      "center_layer": 4.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        4,
+        5,
+        6
+      ],
+      "center_layer": 5.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        5,
+        6,
+        7
+      ],
+      "center_layer": 6.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        6,
+        7,
+        8
+      ],
+      "center_layer": 7.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        7,
+        8,
+        9
+      ],
+      "center_layer": 8.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        8,
+        9,
+        10
+      ],
+      "center_layer": 9.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        9,
+        10,
+        11
+      ],
+      "center_layer": 10.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        10,
+        11,
+        12
+      ],
+      "center_layer": 11.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        11,
+        12,
+        13
+      ],
+      "center_layer": 12.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        12,
+        13,
+        14
+      ],
+      "center_layer": 13.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        13,
+        14,
+        15
+      ],
+      "center_layer": 14.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        14,
+        15,
+        16
+      ],
+      "center_layer": 15.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        15,
+        16,
+        17
+      ],
+      "center_layer": 16.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        16,
+        17,
+        18
+      ],
+      "center_layer": 17.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        17,
+        18,
+        19
+      ],
+      "center_layer": 18.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        18,
+        19,
+        20
+      ],
+      "center_layer": 19.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        19,
+        20,
+        21
+      ],
+      "center_layer": 20.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        20,
+        21,
+        22
+      ],
+      "center_layer": 21.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        21,
+        22,
+        23
+      ],
+      "center_layer": 22.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        22,
+        23,
+        24
+      ],
+      "center_layer": 23.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        23,
+        24,
+        25
+      ],
+      "center_layer": 24.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        24,
+        25,
+        26
+      ],
+      "center_layer": 25.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        25,
+        26,
+        27
+      ],
+      "center_layer": 26.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    }
+  ],
+  "top_windows": [
+    {
+      "window": [
+        0,
+        1,
+        2
+      ],
+      "center_layer": 1.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        1,
+        2,
+        3
+      ],
+      "center_layer": 2.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        2,
+        3,
+        4
+      ],
+      "center_layer": 3.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        3,
+        4,
+        5
+      ],
+      "center_layer": 4.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    },
+    {
+      "window": [
+        4,
+        5,
+        6
+      ],
+      "center_layer": 5.0,
+      "accuracy": 0.19,
+      "accuracy_drop": 0.0
+    }
+  ],
+  "recommended_layers": [
+    0,
+    1,
+    2
+  ]
+}

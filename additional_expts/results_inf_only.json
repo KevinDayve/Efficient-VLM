@@ -1,0 +1,92 @@
+{
+  "n": 500,
+  "full_accuracy": 0.734,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "attn_layers": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "it_temp": 1.0,
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy": 0.628,
+        "dispersion": 0.4958135497835498
+      },
+      "0.05": {
+        "accuracy": 0.69,
+        "dispersion": 0.5039342214488013
+      },
+      "0.1": {
+        "accuracy": 0.712,
+        "dispersion": 0.5032929878793941
+      },
+      "0.25": {
+        "accuracy": 0.73,
+        "dispersion": 0.5033101386435175
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy": 0.554,
+        "dispersion": 0.8660379303236447
+      },
+      "0.05": {
+        "accuracy": 0.64,
+        "dispersion": 0.536488783068783
+      },
+      "0.1": {
+        "accuracy": 0.712,
+        "dispersion": 0.514104271695895
+      },
+      "0.25": {
+        "accuracy": 0.72,
+        "dispersion": 0.5039728915464455
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy": 0.5,
+        "dispersion": 0.11405251494537208
+      },
+      "0.05": {
+        "accuracy": 0.71,
+        "dispersion": 0.5216698605098604
+      },
+      "0.1": {
+        "accuracy": 0.728,
+        "dispersion": 0.5207625095548126
+      },
+      "0.25": {
+        "accuracy": 0.742,
+        "dispersion": 0.5085519215591565
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy": 0.628,
+        "dispersion": 0.4967790146361575
+      },
+      "0.05": {
+        "accuracy": 0.668,
+        "dispersion": 0.5058569823232323
+      },
+      "0.1": {
+        "accuracy": 0.706,
+        "dispersion": 0.5032246631446505
+      },
+      "0.25": {
+        "accuracy": 0.726,
+        "dispersion": 0.5038950630021058
+      }
+    }
+  }
+}

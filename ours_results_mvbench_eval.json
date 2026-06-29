@@ -1,0 +1,230 @@
+{
+  "experiment": "mvbench_oracle_eval",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "scorer_ckpt": "/home/ubuntu/Efficient-VLM/checkpoints/efficient_vlm_oracle_bce/oracle_scorer_best.pt",
+  "data_root": "/home/ubuntu/MVBench",
+  "tasks": [
+    "Action Sequence",
+    "Action Prediction",
+    "Action Antonym",
+    "Fine-grained Action",
+    "Unexpected Action",
+    "Object Existence",
+    "Object Interaction",
+    "Object Shuffle",
+    "Moving Direction",
+    "Action Localization",
+    "Scene Transition",
+    "Action Count",
+    "Moving Count",
+    "Moving Attribute",
+    "State Change",
+    "Character Order",
+    "Egocentric Navigation",
+    "Episodic Reasoning",
+    "Counterfactual Inference"
+  ],
+  "n_evaluated": 3786,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "strategies": [
+    "ours"
+  ],
+  "k_min": 1,
+  "full_accuracy_mean": 0.623559107310507,
+  "full_llm_ms": 440.07561717874523,
+  "per_task": {
+    "Action Sequence": {
+      "n": 188,
+      "full": 0.648936170212766,
+      "ours@0.01": 0.3670212765957447,
+      "ours@0.05": 0.5212765957446809,
+      "ours@0.1": 0.5797872340425532,
+      "ours@0.25": 0.6117021276595744
+    },
+    "Action Prediction": {
+      "n": 200,
+      "full": 0.58,
+      "ours@0.01": 0.415,
+      "ours@0.05": 0.515,
+      "ours@0.1": 0.52,
+      "ours@0.25": 0.545
+    },
+    "Action Antonym": {
+      "n": 200,
+      "full": 0.83,
+      "ours@0.01": 0.765,
+      "ours@0.05": 0.805,
+      "ours@0.1": 0.79,
+      "ours@0.25": 0.82
+    },
+    "Fine-grained Action": {
+      "n": 200,
+      "full": 0.455,
+      "ours@0.01": 0.365,
+      "ours@0.05": 0.445,
+      "ours@0.1": 0.455,
+      "ours@0.25": 0.445
+    },
+    "Unexpected Action": {
+      "n": 200,
+      "full": 0.77,
+      "ours@0.01": 0.65,
+      "ours@0.05": 0.725,
+      "ours@0.1": 0.74,
+      "ours@0.25": 0.765
+    },
+    "Object Existence": {
+      "n": 198,
+      "full": 0.8686868686868687,
+      "ours@0.01": 0.5454545454545454,
+      "ours@0.05": 0.6919191919191919,
+      "ours@0.1": 0.7272727272727273,
+      "ours@0.25": 0.803030303030303
+    },
+    "Object Interaction": {
+      "n": 200,
+      "full": 0.68,
+      "ours@0.01": 0.35,
+      "ours@0.05": 0.515,
+      "ours@0.1": 0.57,
+      "ours@0.25": 0.64
+    },
+    "Object Shuffle": {
+      "n": 200,
+      "full": 0.315,
+      "ours@0.01": 0.275,
+      "ours@0.05": 0.32,
+      "ours@0.1": 0.335,
+      "ours@0.25": 0.335
+    },
+    "Moving Direction": {
+      "n": 200,
+      "full": 0.455,
+      "ours@0.01": 0.35,
+      "ours@0.05": 0.425,
+      "ours@0.1": 0.415,
+      "ours@0.25": 0.43
+    },
+    "Action Localization": {
+      "n": 200,
+      "full": 0.44,
+      "ours@0.01": 0.375,
+      "ours@0.05": 0.4,
+      "ours@0.1": 0.365,
+      "ours@0.25": 0.405
+    },
+    "Scene Transition": {
+      "n": 200,
+      "full": 0.885,
+      "ours@0.01": 0.56,
+      "ours@0.05": 0.76,
+      "ours@0.1": 0.82,
+      "ours@0.25": 0.845
+    },
+    "Action Count": {
+      "n": 200,
+      "full": 0.49,
+      "ours@0.01": 0.5,
+      "ours@0.05": 0.505,
+      "ours@0.1": 0.505,
+      "ours@0.25": 0.56
+    },
+    "Moving Count": {
+      "n": 200,
+      "full": 0.685,
+      "ours@0.01": 0.435,
+      "ours@0.05": 0.51,
+      "ours@0.1": 0.52,
+      "ours@0.25": 0.585
+    },
+    "Moving Attribute": {
+      "n": 200,
+      "full": 0.88,
+      "ours@0.01": 0.42,
+      "ours@0.05": 0.63,
+      "ours@0.1": 0.67,
+      "ours@0.25": 0.8
+    },
+    "State Change": {
+      "n": 200,
+      "full": 0.575,
+      "ours@0.01": 0.43,
+      "ours@0.05": 0.44,
+      "ours@0.1": 0.475,
+      "ours@0.25": 0.525
+    },
+    "Character Order": {
+      "n": 200,
+      "full": 0.715,
+      "ours@0.01": 0.445,
+      "ours@0.05": 0.525,
+      "ours@0.1": 0.61,
+      "ours@0.25": 0.65
+    },
+    "Egocentric Navigation": {
+      "n": 200,
+      "full": 0.365,
+      "ours@0.01": 0.365,
+      "ours@0.05": 0.38,
+      "ours@0.1": 0.365,
+      "ours@0.25": 0.35
+    },
+    "Episodic Reasoning": {
+      "n": 200,
+      "full": 0.475,
+      "ours@0.01": 0.41,
+      "ours@0.05": 0.425,
+      "ours@0.1": 0.455,
+      "ours@0.25": 0.455
+    },
+    "Counterfactual Inference": {
+      "n": 200,
+      "full": 0.735,
+      "ours@0.01": 0.45,
+      "ours@0.05": 0.59,
+      "ours@0.1": 0.645,
+      "ours@0.25": 0.68
+    }
+  },
+  "table": {
+    "ours": {
+      "0.01": {
+        "accuracy_mean": 0.44591978010791,
+        "accuracy_micro": 0.4461172741679873,
+        "accuracy_retention": 0.7151203067680642,
+        "compute_saving": 0.99,
+        "speedup_llm": 11.208353420451676,
+        "llm_ms": 39.263181724422374
+      },
+      "0.05": {
+        "accuracy_mean": 0.5330629361928355,
+        "accuracy_micro": 0.5330163761225568,
+        "accuracy_retention": 0.8548715429592658,
+        "compute_saving": 0.95,
+        "speedup_llm": 8.358009528238012,
+        "llm_ms": 52.6531605033381
+      },
+      "0.1": {
+        "accuracy_mean": 0.5558978927008043,
+        "accuracy_micro": 0.5557316428948759,
+        "accuracy_retention": 0.8914918989772525,
+        "compute_saving": 0.9,
+        "speedup_llm": 6.270588125018296,
+        "llm_ms": 70.18091579367784
+      },
+      "0.25": {
+        "accuracy_mean": 0.5920911805626252,
+        "accuracy_micro": 0.5919175911251982,
+        "accuracy_retention": 0.9495349737034439,
+        "compute_saving": 0.75,
+        "speedup_llm": 3.501866282704451,
+        "llm_ms": 125.6688810056105
+      }
+    }
+  }
+}

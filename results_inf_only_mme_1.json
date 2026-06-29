@@ -1,0 +1,167 @@
+{
+  "experiment": "videomme_inference_only_selection",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/VideoMME/",
+  "subtitles": false,
+  "num_frames": 16,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "attn_layers": [
+    16
+  ],
+  "it_temp": 1.0,
+  "durations": [
+    "short"
+  ],
+  "n": 200,
+  "full_accuracy_mean": 0.645,
+  "full_accuracy_micro": 0.645,
+  "per_duration_seen": {
+    "short": 200
+  },
+  "full_per_duration": {
+    "short": 0.645
+  },
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy_mean": 0.39,
+        "accuracy_micro": 0.39,
+        "dispersion": 0.4791122619047619,
+        "per_duration": {
+          "short": 0.39
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.555,
+        "accuracy_micro": 0.555,
+        "dispersion": 0.4848193099495959,
+        "per_duration": {
+          "short": 0.555
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.53,
+        "accuracy_micro": 0.53,
+        "dispersion": 0.48177022462672414,
+        "per_duration": {
+          "short": 0.53
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.595,
+        "accuracy_micro": 0.595,
+        "dispersion": 0.4829733615572128,
+        "per_duration": {
+          "short": 0.595
+        }
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy_mean": 0.39,
+        "accuracy_micro": 0.39,
+        "dispersion": 0.5328333333333333,
+        "per_duration": {
+          "short": 0.39
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.37,
+        "accuracy_micro": 0.37,
+        "dispersion": 0.501113997113997,
+        "per_duration": {
+          "short": 0.37
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.505,
+        "accuracy_micro": 0.505,
+        "dispersion": 0.4879508035098098,
+        "per_duration": {
+          "short": 0.505
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.585,
+        "accuracy_micro": 0.585,
+        "dispersion": 0.4845287054380434,
+        "per_duration": {
+          "short": 0.585
+        }
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy_mean": 0.425,
+        "accuracy_micro": 0.425,
+        "dispersion": 0.28683035714285715,
+        "per_duration": {
+          "short": 0.425
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.52,
+        "accuracy_micro": 0.52,
+        "dispersion": 0.5279179292929292,
+        "per_duration": {
+          "short": 0.52
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.57,
+        "accuracy_micro": 0.57,
+        "dispersion": 0.5198671466775115,
+        "per_duration": {
+          "short": 0.57
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.6,
+        "accuracy_micro": 0.6,
+        "dispersion": 0.505741111804847,
+        "per_duration": {
+          "short": 0.6
+        }
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy_mean": 0.4,
+        "accuracy_micro": 0.4,
+        "dispersion": 0.481625,
+        "per_duration": {
+          "short": 0.4
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.48,
+        "accuracy_micro": 0.48,
+        "dispersion": 0.48311507936507936,
+        "per_duration": {
+          "short": 0.48
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.525,
+        "accuracy_micro": 0.525,
+        "dispersion": 0.483322553115449,
+        "per_duration": {
+          "short": 0.525
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.575,
+        "accuracy_micro": 0.575,
+        "dispersion": 0.4836502401637556,
+        "per_duration": {
+          "short": 0.575
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "experiment": "mvbench_content_free_baselines",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/MVBench",
+  "sampling": "official",
+  "num_frames": 16,
+  "fps": null,
+  "max_frames": 16,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "baselines": [
+    "regvar"
+  ],
+  "rv_alpha": 2.0,
+  "seed": 0,
+  "settings": [
+    "full",
+    "rvar@0.01",
+    "rvar@0.05",
+    "rvar@0.1",
+    "rvar@0.25"
+  ],
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n_evaluated": 200,
+  "per_task": {
+    "Action Sequence": {
+      "n": 200,
+      "full": 0.695,
+      "rvar@0.01": 0.34,
+      "rvar@0.05": 0.535,
+      "rvar@0.1": 0.62,
+      "rvar@0.25": 0.64
+    }
+  },
+  "table": {
+    "full": {
+      "accuracy_mean": 0.695,
+      "accuracy_micro": 0.695,
+      "kept_vid_pct": 100.0,
+      "vid_tok": 1550.88
+    },
+    "rvar@0.01": {
+      "accuracy_mean": 0.34,
+      "accuracy_micro": 0.34,
+      "kept_vid_pct": 0.9771871453626328,
+      "vid_tok": 15.155
+    },
+    "rvar@0.05": {
+      "accuracy_mean": 0.535,
+      "accuracy_micro": 0.535,
+      "kept_vid_pct": 4.990070153719179,
+      "vid_tok": 77.39
+    },
+    "rvar@0.1": {
+      "accuracy_mean": 0.62,
+      "accuracy_micro": 0.62,
+      "kept_vid_pct": 10.004964923140411,
+      "vid_tok": 155.165
+    },
+    "rvar@0.25": {
+      "accuracy_mean": 0.64,
+      "accuracy_micro": 0.64,
+      "kept_vid_pct": 25.0,
+      "vid_tok": 387.72
+    }
+  }
+}

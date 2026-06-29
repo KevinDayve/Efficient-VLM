@@ -1,0 +1,171 @@
+{
+  "experiment": "videomme_inference_only_selection",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/VideoMME/",
+  "subtitles": false,
+  "num_frames": 16,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "attn_layers": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "it_temp": 1.0,
+  "durations": [
+    "short"
+  ],
+  "n": 900,
+  "full_accuracy_mean": 0.6488888888888888,
+  "full_accuracy_micro": 0.6488888888888888,
+  "per_duration_seen": {
+    "short": 900
+  },
+  "full_per_duration": {
+    "short": 0.6488888888888888
+  },
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy_mean": 0.45111111111111113,
+        "accuracy_micro": 0.45111111111111113,
+        "dispersion": 0.48311864249213454,
+        "per_duration": {
+          "short": 0.45111111111111113
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5366666666666666,
+        "accuracy_micro": 0.5366666666666666,
+        "dispersion": 0.48325760910568166,
+        "per_duration": {
+          "short": 0.5366666666666666
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5388888888888889,
+        "accuracy_micro": 0.5388888888888889,
+        "dispersion": 0.483474484301178,
+        "per_duration": {
+          "short": 0.5388888888888889
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5833333333333334,
+        "accuracy_micro": 0.5833333333333334,
+        "dispersion": 0.48315637105324677,
+        "per_duration": {
+          "short": 0.5833333333333334
+        }
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy_mean": 0.42333333333333334,
+        "accuracy_micro": 0.42333333333333334,
+        "dispersion": 0.5329045536403395,
+        "per_duration": {
+          "short": 0.42333333333333334
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.44555555555555554,
+        "accuracy_micro": 0.44555555555555554,
+        "dispersion": 0.5014930193263525,
+        "per_duration": {
+          "short": 0.44555555555555554
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5311111111111111,
+        "accuracy_micro": 0.5311111111111111,
+        "dispersion": 0.4884114420509694,
+        "per_duration": {
+          "short": 0.5311111111111111
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.6033333333333334,
+        "accuracy_micro": 0.6033333333333334,
+        "dispersion": 0.484789102817866,
+        "per_duration": {
+          "short": 0.6033333333333334
+        }
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy_mean": 0.42444444444444446,
+        "accuracy_micro": 0.42444444444444446,
+        "dispersion": 0.14101640184416106,
+        "per_duration": {
+          "short": 0.42444444444444446
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.58,
+        "accuracy_micro": 0.58,
+        "dispersion": 0.5112421853480881,
+        "per_duration": {
+          "short": 0.58
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.6188888888888889,
+        "accuracy_micro": 0.6188888888888889,
+        "dispersion": 0.516093283169901,
+        "per_duration": {
+          "short": 0.6188888888888889
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.65,
+        "accuracy_micro": 0.65,
+        "dispersion": 0.503895638700956,
+        "per_duration": {
+          "short": 0.65
+        }
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy_mean": 0.45222222222222225,
+        "accuracy_micro": 0.45222222222222225,
+        "dispersion": 0.48169304682682607,
+        "per_duration": {
+          "short": 0.45222222222222225
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5211111111111111,
+        "accuracy_micro": 0.5211111111111111,
+        "dispersion": 0.48397874148742204,
+        "per_duration": {
+          "short": 0.5211111111111111
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5488888888888889,
+        "accuracy_micro": 0.5488888888888889,
+        "dispersion": 0.48357946176403005,
+        "per_duration": {
+          "short": 0.5488888888888889
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5777777777777777,
+        "accuracy_micro": 0.5777777777777777,
+        "dispersion": 0.48375817936821097,
+        "per_duration": {
+          "short": 0.5777777777777777
+        }
+      }
+    }
+  }
+}
