@@ -21,14 +21,23 @@ Low  overlap  ->  which tokens matter flips with the answer; nothing but the ans
 Read everything against the chance level: what two random equal-size sets would
 share. With a 25% budget, chance overlap is ~0.25, NOT 0.
 
-Model: Qwen2.5-VL-3B-Instruct.   Benchmark: MVBench (official protocol).
+Model: Qwen2.5-VL-3B-Instruct.   Benchmark: MVBench or Video-MME (official protocols).
 
-Run:
+Run (MVBench):
     python overlap_subset.py \
+        --benchmark mvbench \
         --data_root ~/MVBench \
         --tasks "Action Sequence" "Scene Transition" \
         --max_samples 50 \
         --out results_overlap_subset.json
+
+Run (Video-MME):
+    python overlap_subset.py \
+        --benchmark videomme \
+        --data_root ~/VideoMME \
+        --durations short medium long \
+        --max_samples 50 \
+        --out results_overlap_subset_videomme.json
 """
 
 import torch
@@ -183,12 +192,22 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    # make_mvbench_prompt is the shared clip->Qwen prompt builder; Video-MME reuses it
+    # with data_type="video", has_bound=False (see accuracy_videomme.py).
     from accuracy_mvbench import DATA_LIST, make_mvbench_prompt, build_prompt as _build_prompt_mvbench
 
-    p = argparse.ArgumentParser(description="Per-option visual-token overlap on MVBench.")
-    p.add_argument("--data_root", required=True, help="Dir with json/ and video/.")
+    p = argparse.ArgumentParser(description="Per-option visual-token overlap on MVBench or Video-MME.")
+    p.add_argument("--benchmark", default="mvbench", choices=["mvbench", "videomme"],
+                   help="Which benchmark to run.")
+    p.add_argument("--data_root", required=True,
+                   help="MVBench: dir with json/ and video/. "
+                        "Video-MME: dir holding videomme/, data/, subtitle/.")
     p.add_argument("--tasks", nargs="+", default=["all"],
-                   help="MVBench task names, or 'all'.")
+                   help="MVBench task names, or 'all' (MVBench only).")
+    p.add_argument("--durations", nargs="+", default=["all"],
+                   help="Video-MME duration splits (short/medium/long), or 'all' (Video-MME only).")
+    p.add_argument("--use_subs", action="store_true",
+                   help="Inject frame-aligned .srt subtitles (Video-MME w/ subs).")
     p.add_argument("--model_name", default=MODEL_ID)
     p.add_argument("--retain", type=float, default=RETAIN,
                    help="Top-k retention fraction (default 0.25).")
@@ -216,35 +235,79 @@ if __name__ == "__main__":
     VIDEO_TOKEN_ID = model.config.video_token_id
     DEVICE = model.device
 
-    tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
-    unknown = [t for t in tasks if t not in DATA_LIST]
-    if unknown:
-        raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
+    # Both branches populate `items`; each item carries messages/letters/gt_idx and a
+    # `task` key (the MVBench task or, for Video-MME, the duration split) that run()
+    # groups by.
+    items = []
+    if args.benchmark == "mvbench":
+        tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
+        unknown = [t for t in tasks if t not in DATA_LIST]
+        if unknown:
+            raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
 
-    json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
-    video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
+        json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
+        video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
 
-    mvbench_items = []
-    for task in tasks:
-        fname, subdir, data_type, has_bound = DATA_LIST[task]
-        with open(os.path.join(json_dir, fname)) as fh:
-            records = json.load(fh)
-        if args.max_samples:
-            records = records[:args.max_samples]
-        for rec in tqdm(records, desc=f"Loading {task}"):
-            path = os.path.join(video_dir, subdir, rec["video"])
-            text, letters, gt_idx = _build_prompt_mvbench(rec)
-            messages = make_mvbench_prompt(
-                path, data_type, has_bound, rec, text,
-                args.max_frames, args.max_pixels, args.fps,
-            )
-            mvbench_items.append({
-                "video_path": path,
-                "task": task,
-                "letters": letters,
-                "gt_idx": gt_idx,
-                "messages": messages,
-            })
+        for task in tasks:
+            fname, subdir, data_type, has_bound = DATA_LIST[task]
+            with open(os.path.join(json_dir, fname)) as fh:
+                records = json.load(fh)
+            if args.max_samples:
+                records = records[:args.max_samples]
+            for rec in tqdm(records, desc=f"Loading {task}"):
+                path = os.path.join(video_dir, subdir, rec["video"])
+                text, letters, gt_idx = _build_prompt_mvbench(rec)
+                messages = make_mvbench_prompt(
+                    path, data_type, has_bound, rec, text,
+                    args.max_frames, args.max_pixels, args.fps,
+                )
+                items.append({
+                    "video_path": path,
+                    "task": task,
+                    "letters": letters,
+                    "gt_idx": gt_idx,
+                    "messages": messages,
+                })
+    else:  # videomme
+        # Video-MME data layer (parquet load, subtitle timestamps, prompt).
+        from evaluate_videomme import (
+            DURATIONS, build_prompt as _build_prompt_videomme,
+            load_records, frame_timestamps, subtitles_for_frames,
+        )
+
+        durations = list(DURATIONS) if args.durations == ["all"] else args.durations
+        unknown = [d for d in durations if d not in DURATIONS]
+        if unknown:
+            raise ValueError(f"unknown durations {unknown}; choices: {list(DURATIONS)}")
+
+        data_root = os.path.expanduser(args.data_root)
+        video_dir = os.path.join(data_root, "data")
+        sub_dir = os.path.join(data_root, "subtitle")
+        records = load_records(data_root)
+
+        for duration in durations:
+            recs = [r for r in records if str(r["duration"]) == duration]
+            if args.max_samples:
+                recs = recs[:args.max_samples]
+            for rec in tqdm(recs, desc=f"Loading {duration}"):
+                path = os.path.join(video_dir, f"{rec['videoID']}.mp4")
+                subs = None
+                if args.use_subs:
+                    timestamps = frame_timestamps(path, args.max_frames)
+                    subs = subtitles_for_frames(
+                        os.path.join(sub_dir, f"{rec['videoID']}.srt"), timestamps)
+                text, letters, gt_idx = _build_prompt_videomme(rec, subs)
+                messages = make_mvbench_prompt(
+                    path, "video", False, rec, text,
+                    args.max_frames, args.max_pixels, args.fps,
+                )
+                items.append({
+                    "video_path": path,
+                    "task": duration,
+                    "letters": letters,
+                    "gt_idx": gt_idx,
+                    "messages": messages,
+                })
 
     def build_prompt_fn(item):
         return item["messages"]
@@ -253,7 +316,7 @@ if __name__ == "__main__":
         return [processor.tokenizer.encode(L, add_special_tokens=False)[0]
                 for L in item["letters"]]
 
-    rows = run(mvbench_items, build_prompt_fn, get_option_token_ids_fn)
+    rows = run(items, build_prompt_fn, get_option_token_ids_fn)
 
     with open(args.out, "w") as fh:
         json.dump(rows, fh, indent=2)
