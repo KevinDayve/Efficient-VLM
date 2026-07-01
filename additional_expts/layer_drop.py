@@ -1,11 +1,11 @@
 """Accuracy when ALL video tokens are dropped *after decoder layer K*.
 
-Self-contained, single-forward MC eval on OpenGVLab/MVBench using the official
-mvbench.ipynb prompt (``Best option:(``). For each layer K we run the decoder
-normally through layer K, then for every layer after K mask *all* video tokens
-out of attention -- so the answer can use vision only up to layer K. This probes
-how deep the model actually needs image tokens (the motivation being that deep
-layers barely attend to them).
+Self-contained, single-forward MC eval on MVBench (official mvbench.ipynb prompt,
+``Best option:(``) or Video-MME (official lmms-eval prompt, ``The best answer
+is:``). For each layer K we run the decoder normally through layer K, then for
+every layer after K mask *all* video tokens out of attention -- so the answer can
+use vision only up to layer K. This probes how deep the model actually needs image
+tokens (the motivation being that deep layers barely attend to them).
 
 For a single forward whose only output is the answer token's logits, masking the
 video tokens out of all layers > K delivers the *same* logits as physically
@@ -14,10 +14,19 @@ of resizing hidden states / masks / RoPE mid-stack. Eager attention is used so
 the additive 4D mask is materialized for the hooks to edit; the model's own
 pre-LLM gating stays off.
 
-Example:
-    python layer_drop.py --data_root ~/MVBench \
+MVBench is averaged over tasks; Video-MME over its duration buckets. The Video-MME
+data layer (uniform full-clip frame sampling + the official prompt) is reused from
+inference_videomme.py so the protocol matches the other Video-MME evals exactly.
+
+Example (MVBench):
+    python layer_drop.py --benchmark mvbench --data_root ~/MVBench \
         --model_name Qwen/Qwen2.5-VL-3B-Instruct \
         --tasks "Action Sequence" --layers 2 5 10 20 --official_sampling
+
+Example (Video-MME, official protocol):
+    python layer_drop.py --benchmark videomme --data_root ~/Video-MME \
+        --model_name Qwen/Qwen2.5-VL-3B-Instruct \
+        --durations short medium long --layers 2 5 10 20 --num_frames 16
 """
 
 from __future__ import annotations
@@ -25,6 +34,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -183,7 +194,7 @@ class LayerKDropper:
         self.handles.clear()
 
 
-def make_plot(path, layer_ks, acc, full, valid, correct, seen):
+def make_plot(path, layer_ks, acc, full, valid, correct, seen, benchmark="MVBench", group_label="task"):
     """Accuracy vs K (drop-after-layer) line, full model as a dashed reference."""
     import matplotlib
     matplotlib.use("Agg")  # headless: write PNG, no display
@@ -191,14 +202,14 @@ def make_plot(path, layer_ks, acc, full, valid, correct, seen):
 
     ys = [acc[f"L{k}"] for k in layer_ks]
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    if len(valid) > 1:  # faint per-task curves behind the mean
-        for t in valid:
-            ax.plot(layer_ks, [correct[t][f"L{k}"] / seen[t] for k in layer_ks],
+    if len(valid) > 1:  # faint per-group curves behind the mean
+        for g in valid:
+            ax.plot(layer_ks, [correct[g][f"L{k}"] / seen[g] for k in layer_ks],
                     color="gray", alpha=0.3, lw=1)
-    ax.plot(layer_ks, ys, "o-", color="C0", label="drop video after layer K (mean over tasks)")
+    ax.plot(layer_ks, ys, "o-", color="C0", label=f"drop video after layer K (mean over {group_label}s)")
     ax.axhline(full, ls="--", color="C3", label=f"full model = {full:.3f}")
     ax.set_xlabel("K  (all video tokens dropped after layer K)")
-    ax.set_ylabel("MVBench accuracy (mean over tasks)")
+    ax.set_ylabel(f"{benchmark} accuracy (mean over {group_label}s)")
     ax.set_title("Accuracy vs vision depth")
     ax.legend()
     ax.grid(alpha=0.3)
@@ -207,10 +218,98 @@ def make_plot(path, layer_ks, acc, full, valid, correct, seen):
     plt.close(fig)
 
 
+def iter_mvbench(args, model, processor):
+    """Yield (task, inputs, letter_ids, gt_idx) for MVBench clips using the official
+    mvbench.ipynb prompt (+ optional midpoint sampler). Corrupt/missing clips are skipped."""
+    tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
+    unknown = [t for t in tasks if t not in DATA_LIST]
+    if unknown:
+        raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
+    json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
+    video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
+
+    for task in tasks:
+        fname, subdir, data_type, has_bound = DATA_LIST[task]
+        with open(os.path.join(json_dir, fname)) as fh:
+            records = json.load(fh)
+        if args.max_samples:
+            records = records[:args.max_samples]
+        for rec in tqdm(records, desc=task):
+            try:
+                path = os.path.join(video_dir, subdir, rec["video"])
+                text, letters, gt_idx = build_prompt(rec)
+                prompt = make_prompt(path, data_type, has_bound, rec, text,
+                                     args.max_frames, args.max_pixels, args.fps,
+                                     official=args.official_sampling, num_segments=args.num_segments)
+                # append the official answer cue so the next token is the option letter
+                chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) + ANSWER_PROMPT
+                imgs, vids = process_vision_info(prompt)
+                inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
+                letter_ids = letter_token_ids(processor, letters)
+            except Exception as e:  # missing/corrupt clip -> skip
+                tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")
+                continue
+            yield task, inputs, letter_ids, gt_idx
+
+
+def iter_videomme(args, model, processor):
+    """Yield (duration, inputs, letter_ids, gt_idx) for Video-MME questions using the
+    official protocol from inference_videomme.py: uniform full-clip frame sampling, the
+    lmms-eval instruction + option block + ``The best answer is:`` cue, and optional
+    frame-aligned subtitles. Corrupt/missing clips are skipped."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from inference_videomme import (
+        DURATIONS as VMME_DURATIONS, load_questions, load_subtitle, make_video_prompt,
+        build_prompt as vmme_build_prompt, letter_token_ids as vmme_letter_token_ids,
+    )
+    durations = list(VMME_DURATIONS) if args.durations == ["all"] else args.durations
+    unknown = [d for d in durations if d not in VMME_DURATIONS]
+    if unknown:
+        raise ValueError(f"unknown durations {unknown}; choices: {list(VMME_DURATIONS)}")
+
+    data_root = os.path.expanduser(args.data_root)
+    video_dir = os.path.join(data_root, "data")
+    sub_dir = os.path.join(data_root, "subtitle")
+    questions = load_questions(os.path.join(data_root, args.json_name))
+    letter_ids = vmme_letter_token_ids(processor)  # fixed A/B/C/D for every question
+
+    for duration in durations:
+        recs = [q for q in questions if q["duration"] == duration]
+        if args.max_samples:
+            recs = recs[:args.max_samples]
+        for rec in tqdm(recs, desc=duration):
+            try:
+                path = os.path.join(video_dir, f"{rec['videoID']}.mp4")
+                subtitle = (load_subtitle(os.path.join(sub_dir, f"{rec['videoID']}.srt"))
+                            if args.subtitles else None)
+                # vmme_build_prompt already ends the text with the official answer cue
+                text, gt_idx = vmme_build_prompt(rec, subtitle=subtitle)
+                prompt = make_video_prompt(path, text, args.num_frames, args.max_pixels)
+                chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+                imgs, vids = process_vision_info(prompt)
+                inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
+            except Exception as e:  # missing/corrupt clip -> skip
+                tqdm.write(f"skip [{duration}] {rec.get('videoID')}: {e}")
+                continue
+            yield duration, inputs, letter_ids, gt_idx
+
+
 def main():
     p = argparse.ArgumentParser(description="Accuracy when all video tokens are dropped after layer K.")
-    p.add_argument("--data_root", required=True, help="Dir holding json/ and video/.")
-    p.add_argument("--tasks", nargs="+", default=["all"], help="MVBench task names, or 'all'.")
+    p.add_argument("--benchmark", default="mvbench", choices=["mvbench", "videomme"],
+                   help="MVBench (averaged over tasks) or Video-MME (averaged over duration buckets).")
+    p.add_argument("--data_root", required=True,
+                   help="MVBench: dir holding json/ and video/. "
+                        "Video-MME: dir holding Video-MME.json, data/ and subtitle/.")
+    p.add_argument("--tasks", nargs="+", default=["all"], help="MVBench task names, or 'all' (mvbench only).")
+    p.add_argument("--durations", nargs="+", default=["all"],
+                   help="Video-MME duration buckets (short/medium/long), or 'all' (videomme only).")
+    p.add_argument("--json_name", default="Video-MME.json", help="Video-MME questions json under --data_root.")
+    p.add_argument("--subtitles", action="store_true",
+                   help="Prepend each clip's .srt subtitle text (Video-MME 'with subtitles' setting).")
+    p.add_argument("--num_frames", type=int, default=16,
+                   help="Frames sampled uniformly over each clip for --benchmark videomme "
+                        "(rounded up to even for Qwen frame-pairing).")
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--layers", type=int, nargs="+", default=[2, 5, 10, 20],
                    help="Decoder layer indices K after which ALL video tokens are dropped.")
@@ -230,11 +329,6 @@ def main():
     p.add_argument("--out", default="results_layer_drop.json", help="Path to dump metrics JSON.")
     p.add_argument("--plot", default=None, help="Path for the accuracy-vs-K PNG (default: --out with .png).")
     args = p.parse_args()
-
-    tasks = list(DATA_LIST) if args.tasks == ["all"] else args.tasks
-    unknown = [t for t in tasks if t not in DATA_LIST]
-    if unknown:
-        raise ValueError(f"unknown tasks {unknown}; choices: {list(DATA_LIST)}")
 
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
     # eager attention guarantees a materialized additive 4D mask the hooks can edit.
@@ -258,61 +352,48 @@ def main():
     settings = [("full", None)] + [(f"L{k}", k) for k in layer_ks]
     col = [c for c, _ in settings]
 
-    correct = {t: {c: 0 for c in col} for t in tasks}
-    seen = {t: 0 for t in tasks}
-    json_dir = os.path.join(os.path.expanduser(args.data_root), "json")
-    video_dir = os.path.join(os.path.expanduser(args.data_root), "video")
+    # accumulators keyed by group (MVBench task or Video-MME duration bucket)
+    correct = defaultdict(lambda: {c: 0 for c in col})
+    seen = defaultdict(int)
     n = 0
 
-    for task in tasks:
-        fname, subdir, data_type, has_bound = DATA_LIST[task]
-        with open(os.path.join(json_dir, fname)) as fh:
-            records = json.load(fh)
-        if args.max_samples:
-            records = records[:args.max_samples]
+    # Benchmark dispatch: each iterator handles its own data layout / official prompt
+    # and yields fully-built (group, inputs, letter_ids, gt_idx) samples.
+    if args.benchmark == "mvbench":
+        sample_iter = iter_mvbench(args, model, processor)
+        group_label = "task"
+    else:
+        sample_iter = iter_videomme(args, model, processor)
+        group_label = "duration"
 
-        for rec in tqdm(records, desc=task):
-            try:
-                path = os.path.join(video_dir, subdir, rec["video"])
-                text, letters, gt_idx = build_prompt(rec)
-                prompt = make_prompt(path, data_type, has_bound, rec, text,
-                                     args.max_frames, args.max_pixels, args.fps,
-                                     official=args.official_sampling, num_segments=args.num_segments)
-                # append the official answer cue so the next token is the option letter
-                chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) + ANSWER_PROMPT
-                imgs, vids = process_vision_info(prompt)
-                inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
-                letter_ids = letter_token_ids(processor, letters)
-                video_cols = (inputs["input_ids"][0] == video_token_id).nonzero(as_tuple=False).flatten()
-            except Exception as e:  # missing/corrupt clip -> skip
-                tqdm.write(f"skip [{task}] {rec.get('video')}: {e}")
-                continue
-
-            for name, k in settings:
-                with torch.no_grad():
-                    if k is None:  # full model, no hooks
+    for group, inputs, letter_ids, gt_idx in sample_iter:
+        video_cols = (inputs["input_ids"][0] == video_token_id).nonzero(as_tuple=False).flatten()
+        for name, k in settings:
+            with torch.no_grad():
+                if k is None:  # full model, no hooks
+                    logits = model(**inputs, use_cache=False).logits
+                else:  # mask all video tokens out of layers > k
+                    with LayerKDropper(layers, video_cols, k):
                         logits = model(**inputs, use_cache=False).logits
-                    else:  # mask all video tokens out of layers > k
-                        with LayerKDropper(layers, video_cols, k):
-                            logits = model(**inputs, use_cache=False).logits
-                correct[task][name] += int(logits_to_pred(logits, letter_ids) == gt_idx)
-            seen[task] += 1
-            n += 1
+            correct[group][name] += int(logits_to_pred(logits, letter_ids) == gt_idx)
+        seen[group] += 1
+        n += 1
 
     if n == 0:
-        raise RuntimeError("No samples evaluated -- check --data_root layout (json/ and video/).")
+        raise RuntimeError("No samples evaluated -- check --data_root layout for --benchmark "
+                           f"{args.benchmark}.")
 
-    valid = [t for t in tasks if seen[t]]
-    acc = {c: float(np.mean([correct[t][c] / seen[t] for t in valid])) for c in col}  # mean over tasks
+    valid = [g for g in seen if seen[g]]
+    acc = {c: float(np.mean([correct[g][c] / seen[g] for g in valid])) for c in col}  # mean over groups
     full = acc["full"]
 
-    print(f"\nEvaluated {n} samples across {len(valid)} task(s)\n")
-    print(f"{'task':<26}{'n':>5}" + "".join(f"{c:>10}" for c in col))
+    print(f"\nEvaluated {n} samples across {len(valid)} {group_label}(s)\n")
+    print(f"{group_label:<26}{'n':>5}" + "".join(f"{c:>10}" for c in col))
     print("-" * (31 + 10 * len(col)))
-    for t in valid:
-        print(f"{t:<26}{seen[t]:>5}" + "".join(f"{correct[t][c] / seen[t]:>10.4f}" for c in col))
+    for g in valid:
+        print(f"{g:<26}{seen[g]:>5}" + "".join(f"{correct[g][c] / seen[g]:>10.4f}" for c in col))
     print("-" * (31 + 10 * len(col)))
-    print(f"{'mean (per-task)':<26}{'':>5}" + "".join(f"{acc[c]:>10.4f}" for c in col))
+    print(f"{f'mean (per-{group_label})':<26}{'':>5}" + "".join(f"{acc[c]:>10.4f}" for c in col))
 
     # accuracy drop vs the full model, per setting
     print(f"\n{'setting':<10}{'acc':>9}{'drop':>9}")
@@ -320,20 +401,29 @@ def main():
     for c in col:
         print(f"{c:<10}{acc[c]:>9.4f}{full - acc[c]:>9.4f}")
 
+    if args.benchmark == "videomme":
+        sampling, num_frames, fps = "official_videomme", args.num_frames, None
+    elif args.official_sampling:
+        sampling, num_frames, fps = "official", args.num_segments, None
+    else:
+        sampling, num_frames, fps = "fps", None, args.fps
+
     result = {
-        "experiment": "mvbench_drop_all_video_after_layer_k",
+        "experiment": "drop_all_video_after_layer_k",
+        "benchmark": args.benchmark,
         "model_name": args.model_name,
         "data_root": args.data_root,
-        "sampling": ("official" if args.official_sampling else "fps"),
-        "num_frames": (args.num_segments if args.official_sampling else None),
-        "fps": (None if args.official_sampling else args.fps),
+        "sampling": sampling,
+        "num_frames": num_frames,
+        "fps": fps,
+        "subtitles": (args.subtitles if args.benchmark == "videomme" else None),
         "layers": layer_ks,
         "layer_step": args.layer_step,
         "n_layers": n_layers,
-        "tasks": valid,
+        f"{group_label}s": valid,
         "n_evaluated": n,
         "full_accuracy": full,
-        "per_task": {t: {"n": seen[t], **{c: correct[t][c] / seen[t] for c in col}} for t in valid},
+        "per_group": {g: {"n": seen[g], **{c: correct[g][c] / seen[g] for c in col}} for g in valid},
         "table": {c: {"accuracy": acc[c], "drop": full - acc[c]} for c in col},
     }
     with open(args.out, "w") as fh:
@@ -342,7 +432,8 @@ def main():
 
     plot_path = args.plot or os.path.splitext(args.out)[0] + ".png"
     try:
-        make_plot(plot_path, layer_ks, acc, full, valid, correct, seen)
+        make_plot(plot_path, layer_ks, acc, full, valid, correct, seen,
+                  benchmark=args.benchmark, group_label=group_label)
         print(f"Saved -> {plot_path}")
     except Exception as e:  # plotting is best-effort; results are already saved
         print(f"(plot skipped: {e})")
