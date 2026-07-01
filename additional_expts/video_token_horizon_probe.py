@@ -348,12 +348,12 @@ def main():
         description="Per-layer visual-token geometry probe on MVBench / VideoMME clips.")
     ap.add_argument("--model", default="Qwen/Qwen2.5-VL-7B-Instruct")
     # MVBench
-    ap.add_argument("--mvbench", default=None,
+    ap.add_argument("--mvbench", default="~/MVBench",
                     help="MVBench data root holding json/ and video/ (same as inference.py --data_root).")
     ap.add_argument("--mvbench_tasks", nargs="+", default=["all"],
                     help="MVBench task names, or 'all'.")
     # VideoMME
-    ap.add_argument("--videomme", default=None,
+    ap.add_argument("--videomme", default="~/Video-MME",
                     help="VideoMME data root holding Video-MME.json and data/ "
                          "(same as inference_videomme.py --data_root).")
     ap.add_argument("--vmme_durations", nargs="+", default=["all"],
@@ -368,8 +368,8 @@ def main():
     ap.add_argument("--fps", type=float, default=2.0,
                     help="FPS for MVBench fps-mode fallback (only used when official_sampling=True "
                          "does not apply, i.e. frame-folder tasks already handled by official_frames).")
-    ap.add_argument("--max_clips", type=int, default=20,
-                    help="Max clips PER BENCHMARK (for quick runs; 0 = no cap).")
+    ap.add_argument("--max_clips", type=int, default=0,
+                    help="Max clips PER BENCHMARK (for quick runs; 0 = no cap, the default).")
     ap.add_argument("--drop_all", action="store_true",
                     help="Also compute the (heavier) label-free horizon D_i.")
     ap.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
