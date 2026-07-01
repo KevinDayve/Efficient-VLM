@@ -72,18 +72,25 @@ DURATIONS = ["short", "medium", "long"]
 TEMPORAL_PATCH_SIZE = 2  # Qwen2.5-VL pairs adjacent frames; the sampled count must be even.
 
 
-def load_questions(json_path):
-    """Flatten the Video-MME json to a list of question dicts (videoID/duration/
-    question/options/answer). Accepts both the official grouped-by-video format
-    (each video carries a ``questions`` list) and a flat per-question list."""
-    with open(json_path) as fh:
+def load_questions(path):
+    """Flatten the Video-MME data to a list of question dicts (videoID/duration/
+    question/options/answer). Accepts a .parquet file, the official grouped-by-video
+    JSON format, or a flat per-question JSON list."""
+    if path.endswith(".parquet"):
+        import pandas as pd
+        df = pd.read_parquet(path)
+        return [
+            {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in row.items()}
+            for row in df.to_dict("records")
+        ]
+    with open(path) as fh:
         data = json.load(fh)
     out = []
     for rec in data:
         if "questions" in rec:  # grouped: one video -> several questions
             for q in rec["questions"]:
                 out.append({"videoID": rec["videoID"], "duration": rec["duration"], **q})
-        else:  # already flat (e.g. the lmms-lab parquet exported to json)
+        else:  # already flat
             out.append(rec)
     return out
 
