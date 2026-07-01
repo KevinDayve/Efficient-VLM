@@ -1,0 +1,209 @@
+{
+  "experiment": "videomme_inference_only_selection",
+  "model_name": "/storage/users/venky/psaiaditya/models/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/storage/users/venky/psaiaditya/datasets/VideoMME",
+  "subtitles": false,
+  "num_frames": 16,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "attn_layers": [
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "it_temp": 1.0,
+  "durations": [
+    "short",
+    "medium",
+    "long"
+  ],
+  "n": 2700,
+  "full_accuracy_mean": 0.5585185185185185,
+  "full_accuracy_micro": 0.5585185185185185,
+  "per_duration_seen": {
+    "short": 900,
+    "medium": 900,
+    "long": 900
+  },
+  "full_per_duration": {
+    "short": 0.6488888888888888,
+    "medium": 0.5522222222222222,
+    "long": 0.47444444444444445
+  },
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy_mean": 0.42518518518518517,
+        "accuracy_micro": 0.42518518518518517,
+        "dispersion": 0.48312282884304936,
+        "per_duration": {
+          "short": 0.4577777777777778,
+          "medium": 0.41,
+          "long": 0.4077777777777778
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.47000000000000003,
+        "accuracy_micro": 0.47,
+        "dispersion": 0.48351367791852007,
+        "per_duration": {
+          "short": 0.5333333333333333,
+          "medium": 0.45555555555555555,
+          "long": 0.4211111111111111
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.48259259259259263,
+        "accuracy_micro": 0.4825925925925926,
+        "dispersion": 0.4834422097714148,
+        "per_duration": {
+          "short": 0.5377777777777778,
+          "medium": 0.4822222222222222,
+          "long": 0.42777777777777776
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5151851851851852,
+        "accuracy_micro": 0.5151851851851852,
+        "dispersion": 0.48322638620129216,
+        "per_duration": {
+          "short": 0.58,
+          "medium": 0.5055555555555555,
+          "long": 0.46
+        }
+      }
+    },
+    "stratified_uniform": {
+      "0.01": {
+        "accuracy_mean": 0.4003703703703703,
+        "accuracy_micro": 0.4003703703703704,
+        "dispersion": 0.5329853683580046,
+        "per_duration": {
+          "short": 0.41333333333333333,
+          "medium": 0.39555555555555555,
+          "long": 0.39222222222222225
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.4225925925925926,
+        "accuracy_micro": 0.4225925925925926,
+        "dispersion": 0.5014634357412134,
+        "per_duration": {
+          "short": 0.44555555555555554,
+          "medium": 0.42,
+          "long": 0.4022222222222222
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.4740740740740741,
+        "accuracy_micro": 0.4740740740740741,
+        "dispersion": 0.4883144083776899,
+        "per_duration": {
+          "short": 0.5322222222222223,
+          "medium": 0.45444444444444443,
+          "long": 0.43555555555555553
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5170370370370371,
+        "accuracy_micro": 0.5170370370370371,
+        "dispersion": 0.4847182772681764,
+        "per_duration": {
+          "short": 0.5988888888888889,
+          "medium": 0.49666666666666665,
+          "long": 0.45555555555555555
+        }
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy_mean": 0.40407407407407403,
+        "accuracy_micro": 0.4040740740740741,
+        "dispersion": 0.1482300575459641,
+        "per_duration": {
+          "short": 0.4177777777777778,
+          "medium": 0.4011111111111111,
+          "long": 0.3933333333333333
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.4988888888888889,
+        "accuracy_micro": 0.4988888888888889,
+        "dispersion": 0.5165769273379227,
+        "per_duration": {
+          "short": 0.5722222222222222,
+          "medium": 0.47888888888888886,
+          "long": 0.44555555555555554
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5325925925925926,
+        "accuracy_micro": 0.5325925925925926,
+        "dispersion": 0.5174583886017093,
+        "per_duration": {
+          "short": 0.6244444444444445,
+          "medium": 0.5122222222222222,
+          "long": 0.46111111111111114
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5485185185185185,
+        "accuracy_micro": 0.5485185185185185,
+        "dispersion": 0.504827381097549,
+        "per_duration": {
+          "short": 0.6466666666666666,
+          "medium": 0.53,
+          "long": 0.4688888888888889
+        }
+      }
+    },
+    "inverse_transform": {
+      "0.01": {
+        "accuracy_mean": 0.4222222222222222,
+        "accuracy_micro": 0.4222222222222222,
+        "dispersion": 0.4813687471223622,
+        "per_duration": {
+          "short": 0.4488888888888889,
+          "medium": 0.43222222222222223,
+          "long": 0.38555555555555554
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.4677777777777778,
+        "accuracy_micro": 0.4677777777777778,
+        "dispersion": 0.483734317487211,
+        "per_duration": {
+          "short": 0.5222222222222223,
+          "medium": 0.4622222222222222,
+          "long": 0.41888888888888887
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.49666666666666665,
+        "accuracy_micro": 0.49666666666666665,
+        "dispersion": 0.48358360698312414,
+        "per_duration": {
+          "short": 0.5577777777777778,
+          "medium": 0.49666666666666665,
+          "long": 0.43555555555555553
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5122222222222222,
+        "accuracy_micro": 0.5122222222222222,
+        "dispersion": 0.48362357153317925,
+        "per_duration": {
+          "short": 0.5755555555555556,
+          "medium": 0.5011111111111111,
+          "long": 0.46
+        }
+      }
+    }
+  }
+}
