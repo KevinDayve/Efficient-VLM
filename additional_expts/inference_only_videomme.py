@@ -121,6 +121,35 @@ def frame_grid_dims(n_video, n_frames):
     h = max(1, per // w)
     return h, w, per
 
+def temporal_coverage(keep_idx, n_video, n_frames):
+    """
+    Distribution of tokens across frames. A companion to mean_dispersion, which measures spatial spread within a frame.
+    """
+    per = n_video // n_frames
+    if per < 1 or n_frames < 2:
+        return {
+            "frame_coverage": float("nan"),
+            "frame_entropy": float("nan"),
+            "frac_frames_ge_2": float("nan"),
+        }
+    fo = keep_idx.detach().cpu().numpy() // per
+    fo = fo[fo < n_frames]
+    if fo.size == 0:
+        return {
+            "frame_coverage": float("nan"),
+            "frame_entropy": float("nan"),
+            "frac_frames_ge_2": float("nan"),
+        }
+    counts = np.bincount(fo, minlength=n_frames)
+    k = counts.sum()
+    p = counts[counts > 0] / k
+    return {
+        "frame_coverage": float((counts > 0).sum() / n_frames),
+        "frame_entropy": float(-(p * np.log(p)).sum()),
+        "frac_frames_ge_2": float((counts >= 2).sum() / n_frames),
+    }
+
+
 
 def mean_dispersion(keep_idx, n_video, n_frames):
     """Mean pairwise Chebyshev distance among selected tokens within each frame,
@@ -212,6 +241,9 @@ def main(args):
     # per (strategy, rho, duration) correct counts and per-duration seen counts.
     correct = {s: {r: {d: 0 for d in durations} for r in rhos} for s in STRATEGIES}
     disp = {s: {r: [] for r in rhos} for s in STRATEGIES}
+    tcov = {s: {r: [] for r in rhos} for s in STRATEGIES}
+    tent = {s: {r: [] for r in rhos} for s in STRATEGIES}
+    tge2 = {s: {r: [] for r in rhos} for s in STRATEGIES}
     full_correct = {d: 0 for d in durations}
     seen = {d: 0 for d in durations}
     n = 0
@@ -273,6 +305,11 @@ def main(args):
                 lp = score_answer(model, base, pos, attn, vpos, keep, letter_ids)
                 correct[s][rho][dur] += int(lp.argmax().item() == gt_idx)
                 d = mean_dispersion(keep, n_video, n_frames)
+                ts = temporal_coverage(keep, n_video, n_frames)
+                if ts["frame_coverage"] == ts["frame_coverage"]:
+                    tcov[s][rho].append(ts["frame_coverage"])
+                    tent[s][rho].append(ts["frame_entropy"])
+                    tge2[s][rho].append(ts["frac_frames_ge_2"])
                 if d == d:
                     disp[s][rho].append(d)
         seen[dur] += 1
@@ -317,6 +354,9 @@ def main(args):
             dsp = float(np.mean(disp[s][rho])) if disp[s][rho] else float("nan")
             out["table"][s][str(rho)] = {
                 "accuracy_mean": acc, "accuracy_micro": acc_micro, "dispersion": dsp,
+                "frame_coverage":   float(np.mean(tcov[s][rho])) if tcov[s][rho] else float("nan"),
+                "temporal_entropy": float(np.mean(tent[s][rho])) if tent[s][rho] else float("nan"),
+                "frac_frames_ge2":  float(np.mean(tge2[s][rho])) if tge2[s][rho] else float("nan"),
                 "per_duration": {d: correct[s][rho][d] / seen[d] for d in valid}}
             print(f"{s:<20}{rho:>6.2f}{acc:>9.4f}{acc_micro:>9.4f}{dsp:>12.3f}")
 
