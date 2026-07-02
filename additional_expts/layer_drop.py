@@ -1,22 +1,26 @@
-"""Accuracy when ALL video tokens are dropped *after decoder layer K*.
+"""Accuracy when ALL visual tokens are dropped *after decoder layer K*.
 
 Self-contained, single-forward MC eval on MVBench (official mvbench.ipynb prompt,
-``Best option:(``) or Video-MME (official lmms-eval prompt, ``The best answer
-is:``). For each layer K we run the decoder normally through layer K, then for
-every layer after K mask *all* video tokens out of attention -- so the answer can
-use vision only up to layer K. This probes how deep the model actually needs image
-tokens (the motivation being that deep layers barely attend to them).
+``Best option:(``), Video-MME (official lmms-eval prompt, ``The best answer
+is:``), or MMBench (single-image prompt, ``Answer with the option's letter``).
+For each layer K we run the decoder normally through layer K, then for every layer
+after K mask *all* visual tokens out of attention -- so the answer can use vision
+only up to layer K. This probes how deep the model actually needs visual tokens
+(the motivation being that deep layers barely attend to them).
 
 For a single forward whose only output is the answer token's logits, masking the
-video tokens out of all layers > K delivers the *same* logits as physically
+visual tokens out of all layers > K delivers the *same* logits as physically
 removing them (no surviving token ever attends to them), without the bookkeeping
 of resizing hidden states / masks / RoPE mid-stack. Eager attention is used so
 the additive 4D mask is materialized for the hooks to edit; the model's own
 pre-LLM gating stays off.
 
-MVBench is averaged over tasks; Video-MME over its duration buckets. The Video-MME
-data layer (uniform full-clip frame sampling + the official prompt) is reused from
-inference_videomme.py so the protocol matches the other Video-MME evals exactly.
+MVBench is averaged over tasks; Video-MME over its duration buckets; MMBench over
+its l2-categories. The Video-MME data layer (uniform full-clip frame sampling +
+the official prompt) is reused from inference_videomme.py and the MMBench data
+layer (parquet-embedded image + single-image prompt) from overlap_subset_mmbench.py
+so each protocol matches the other evals on that benchmark exactly. The masked token
+is the video token for MVBench/Video-MME and the image token for MMBench.
 
 Example (MVBench):
     python layer_drop.py --benchmark mvbench --data_root ~/MVBench \
@@ -27,6 +31,11 @@ Example (Video-MME, official protocol):
     python layer_drop.py --benchmark videomme --data_root ~/Video-MME \
         --model_name Qwen/Qwen2.5-VL-3B-Instruct \
         --durations short medium long --layers 2 5 10 20 --num_frames 16
+
+Example (MMBench, dev split):
+    python layer_drop.py --benchmark mmbench --data_root ~/datasets/MMBench \
+        --model_name Qwen/Qwen2.5-VL-3B-Instruct \
+        --split dev --layers 2 5 10 20
 """
 
 from __future__ import annotations
@@ -163,16 +172,17 @@ def logits_to_pred(logits, letter_ids):
 
 
 class LayerKDropper:
-    """Installs pre-hooks that mask ALL video tokens out of attention after layer K.
+    """Installs pre-hooks that mask ALL visual tokens out of attention after layer K.
 
-    For every layer > K, the video-token columns of the additive 4D attention mask
+    For every layer > K, the visual-token columns of the additive 4D attention mask
     are set to -inf, so no later layer (and hence not the answer token) can attend
-    to any video token -- vision is available only through layers 0..K. Hooks are
-    (de)registered per forward via the context-manager protocol."""
+    to any visual token -- vision is available only through layers 0..K. Hooks are
+    (de)registered per forward via the context-manager protocol. `visual_cols` are
+    video-token positions for MVBench/Video-MME and image-token positions for MMBench."""
 
-    def __init__(self, layers, video_cols, layer_k):
+    def __init__(self, layers, visual_cols, layer_k):
         self.layers = layers
-        self.video_cols = video_cols  # LongTensor of video-token sequence positions
+        self.visual_cols = visual_cols  # LongTensor of visual-token sequence positions
         self.k = layer_k
         self.handles = []
 
@@ -180,8 +190,8 @@ class LayerKDropper:
         am = kwargs.get("attention_mask")
         if am is None and len(args) >= 2:
             am = args[1]
-        if torch.is_tensor(am):  # additive 4D float mask (eager): block all video columns
-            am[..., self.video_cols] = torch.finfo(am.dtype).min
+        if torch.is_tensor(am):  # additive 4D float mask (eager): block all visual columns
+            am[..., self.visual_cols] = torch.finfo(am.dtype).min
 
     def __enter__(self):
         for idx in range(self.k + 1, len(self.layers)):
@@ -194,7 +204,8 @@ class LayerKDropper:
         self.handles.clear()
 
 
-def make_plot(path, layer_ks, acc, full, valid, correct, seen, benchmark="MVBench", group_label="task"):
+def make_plot(path, layer_ks, acc, full, valid, correct, seen, benchmark="MVBench",
+              group_label="task", visual="video"):
     """Accuracy vs K (drop-after-layer) line, full model as a dashed reference."""
     import matplotlib
     matplotlib.use("Agg")  # headless: write PNG, no display
@@ -206,9 +217,9 @@ def make_plot(path, layer_ks, acc, full, valid, correct, seen, benchmark="MVBenc
         for g in valid:
             ax.plot(layer_ks, [correct[g][f"L{k}"] / seen[g] for k in layer_ks],
                     color="gray", alpha=0.3, lw=1)
-    ax.plot(layer_ks, ys, "o-", color="C0", label=f"drop video after layer K (mean over {group_label}s)")
+    ax.plot(layer_ks, ys, "o-", color="C0", label=f"drop {visual} after layer K (mean over {group_label}s)")
     ax.axhline(full, ls="--", color="C3", label=f"full model = {full:.3f}")
-    ax.set_xlabel("K  (all video tokens dropped after layer K)")
+    ax.set_xlabel(f"K  (all {visual} tokens dropped after layer K)")
     ax.set_ylabel(f"{benchmark} accuracy (mean over {group_label}s)")
     ax.set_title("Accuracy vs vision depth")
     ax.legend()
@@ -294,16 +305,68 @@ def iter_videomme(args, model, processor):
             yield duration, inputs, letter_ids, gt_idx
 
 
+def iter_mmbench(args, model, processor):
+    """Yield (l2-category, inputs, letter_ids, gt_idx) for MMBench questions using the
+    single-image protocol from overlap_subset_mmbench.py: the image system prompt +
+    lettered option block + ``Answer with the option's letter`` cue, over the PNG
+    embedded in each parquet row. Questions with <2 present options or a withheld
+    answer are skipped (so 'test', whose answers are hidden, yields nothing scorable)."""
+    import glob
+    import io
+
+    import pandas as pd
+    from PIL import Image
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from overlap_subset_mmbench import build_prompt_text, build_mmbench_prompt
+
+    data_dir = os.path.join(os.path.expanduser(args.data_root), "data")
+    matches = sorted(glob.glob(os.path.join(data_dir, f"{args.split}-*.parquet")))
+    if not matches:
+        raise FileNotFoundError(f"no {args.split}-*.parquet under {data_dir}")
+    df = pd.read_parquet(matches[0])
+    if args.l2_categories != ["all"]:
+        df = df[df["l2-category"].isin(set(args.l2_categories))]
+    if args.max_samples:  # here caps TOTAL samples (MMBench isn't iterated per task)
+        df = df.iloc[:args.max_samples]
+
+    def decode_image(cell):  # HF Image feature -> dict with 'bytes'; tolerate raw bytes
+        b = cell["bytes"] if isinstance(cell, dict) else cell
+        return Image.open(io.BytesIO(b)).convert("RGB")
+
+    for _, rec in tqdm(df.iterrows(), total=len(df), desc=f"MMBench/{args.split}"):
+        try:
+            text, letters, gt_idx = build_prompt_text(rec)
+            if len(letters) < 2 or gt_idx < 0:  # unusable / answer withheld
+                continue
+            prompt = build_mmbench_prompt(decode_image(rec["image"]), text, args.max_pixels)
+            # build_prompt_text already appends the official answer cue; the next token is the letter
+            chat = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+            imgs, vids = process_vision_info(prompt)
+            inputs = processor(text=[chat], images=imgs, videos=vids, return_tensors="pt").to(model.device)
+            letter_ids = letter_token_ids(processor, letters)
+        except Exception as e:  # missing/corrupt image -> skip
+            tqdm.write(f"skip [{rec.get('l2-category')}] idx={rec.get('index')}: {e}")
+            continue
+        yield rec.get("l2-category", "unknown"), inputs, letter_ids, gt_idx
+
+
 def main():
-    p = argparse.ArgumentParser(description="Accuracy when all video tokens are dropped after layer K.")
-    p.add_argument("--benchmark", default="mvbench", choices=["mvbench", "videomme"],
-                   help="MVBench (averaged over tasks) or Video-MME (averaged over duration buckets).")
+    p = argparse.ArgumentParser(description="Accuracy when all visual tokens are dropped after layer K.")
+    p.add_argument("--benchmark", default="mvbench", choices=["mvbench", "videomme", "mmbench"],
+                   help="MVBench (averaged over tasks), Video-MME (over duration buckets), "
+                        "or MMBench (over l2-categories).")
     p.add_argument("--data_root", required=True,
                    help="MVBench: dir holding json/ and video/. "
-                        "Video-MME: dir holding Video-MME.json, data/ and subtitle/.")
+                        "Video-MME: dir holding Video-MME.json, data/ and subtitle/. "
+                        "MMBench: dir holding data/ with <split>-*.parquet.")
     p.add_argument("--tasks", nargs="+", default=["all"], help="MVBench task names, or 'all' (mvbench only).")
     p.add_argument("--durations", nargs="+", default=["all"],
                    help="Video-MME duration buckets (short/medium/long), or 'all' (videomme only).")
+    p.add_argument("--split", default="dev", choices=["dev", "test"],
+                   help="MMBench split (mmbench only). Use 'dev'; 'test' answers are withheld.")
+    p.add_argument("--l2_categories", nargs="+", default=["all"],
+                   help="MMBench l2-category names to keep, or 'all' (mmbench only).")
     p.add_argument("--json_name", default="Video-MME.json", help="Video-MME questions json under --data_root.")
     p.add_argument("--subtitles", action="store_true",
                    help="Prepend each clip's .srt subtitle text (Video-MME 'with subtitles' setting).")
@@ -336,7 +399,9 @@ def main():
         args.model_name, torch_dtype=dtype, device_map="auto", attn_implementation="eager").eval()
     processor = AutoProcessor.from_pretrained(args.model_name)
     layers = model.model.language_model.layers
-    video_token_id = model.config.video_token_id
+    # MVBench/Video-MME mask the video token; MMBench masks the image token.
+    visual_token_id = (model.config.image_token_id if args.benchmark == "mmbench"
+                       else model.config.video_token_id)
     n_layers = len(layers)
     # --layer_step sweeps every step-th boundary across all layers; else use --layers.
     if args.layer_step:
@@ -362,18 +427,21 @@ def main():
     if args.benchmark == "mvbench":
         sample_iter = iter_mvbench(args, model, processor)
         group_label = "task"
-    else:
+    elif args.benchmark == "videomme":
         sample_iter = iter_videomme(args, model, processor)
         group_label = "duration"
+    else:
+        sample_iter = iter_mmbench(args, model, processor)
+        group_label = "l2-category"
 
     for group, inputs, letter_ids, gt_idx in sample_iter:
-        video_cols = (inputs["input_ids"][0] == video_token_id).nonzero(as_tuple=False).flatten()
+        visual_cols = (inputs["input_ids"][0] == visual_token_id).nonzero(as_tuple=False).flatten()
         for name, k in settings:
             with torch.no_grad():
                 if k is None:  # full model, no hooks
                     logits = model(**inputs, use_cache=False).logits
-                else:  # mask all video tokens out of layers > k
-                    with LayerKDropper(layers, video_cols, k):
+                else:  # mask all visual tokens out of layers > k
+                    with LayerKDropper(layers, visual_cols, k):
                         logits = model(**inputs, use_cache=False).logits
             correct[group][name] += int(logits_to_pred(logits, letter_ids) == gt_idx)
         seen[group] += 1
@@ -401,7 +469,9 @@ def main():
     for c in col:
         print(f"{c:<10}{acc[c]:>9.4f}{full - acc[c]:>9.4f}")
 
-    if args.benchmark == "videomme":
+    if args.benchmark == "mmbench":
+        sampling, num_frames, fps = "mmbench_image", None, None
+    elif args.benchmark == "videomme":
         sampling, num_frames, fps = "official_videomme", args.num_frames, None
     elif args.official_sampling:
         sampling, num_frames, fps = "official", args.num_segments, None
@@ -431,9 +501,10 @@ def main():
     print(f"\nSaved -> {args.out}")
 
     plot_path = args.plot or os.path.splitext(args.out)[0] + ".png"
+    visual = "image" if args.benchmark == "mmbench" else "video"
     try:
         make_plot(plot_path, layer_ks, acc, full, valid, correct, seen,
-                  benchmark=args.benchmark, group_label=group_label)
+                  benchmark=args.benchmark, group_label=group_label, visual=visual)
         print(f"Saved -> {plot_path}")
     except Exception as e:  # plotting is best-effort; results are already saved
         print(f"(plot skipped: {e})")

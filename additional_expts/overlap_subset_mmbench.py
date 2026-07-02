@@ -38,6 +38,7 @@ Run:
 import torch
 from itertools import combinations
 from collections import defaultdict
+from tqdm import tqdm
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
@@ -158,18 +159,22 @@ def run(items, build_prompt, get_option_token_ids):
     Each item must also carry item['task'] (MMBench l2-category).
     """
     by_task, rows = defaultdict(list), []
-    for item in items:
+    total = len(items) if hasattr(items, "__len__") else None
+    pbar = tqdm(items, total=total, desc="scoring examples", unit="ex")
+    for item in pbar:
         opt_ids = get_option_token_ids(item)
         if len(opt_ids) < 2:
             continue
         try:
             r = overlap_for_sample(build_prompt(item), opt_ids)
         except Exception as e:
-            print(f"skip [{item['task']}] idx={item.get('index', '')}: {e}")
+            tqdm.write(f"skip [{item['task']}] idx={item.get('index', '')}: {e}")
             continue
         r["task"] = item["task"]
         rows.append(r)
         by_task[item["task"]].append(r["normalized_overlap"])
+        running = sum(r["normalized_overlap"] for r in rows) / len(rows)
+        pbar.set_postfix(done=len(rows), mean_overlap=f"{running:+.3f}")
         torch.cuda.empty_cache()
 
     print(f"\n{'task (l2-category)':28s}  n    norm_overlap")
