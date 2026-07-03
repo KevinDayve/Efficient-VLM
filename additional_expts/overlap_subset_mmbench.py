@@ -202,10 +202,12 @@ def _is_present(v):
     return bool(s) and s.lower() != "nan"
 
 
-def build_mmbench_prompt(image, text, max_pixels=None):
+def build_mmbench_prompt(image, text, max_pixels=None, min_pixels=None):
     """Single-image Qwen chat prompt whose image item drives process_vision_info.
     `image` is a PIL.Image; qwen_vl_utils.fetch_image accepts PIL objects directly."""
     img = {"type": "image", "image": image}
+    if min_pixels is not None:
+        img["min_pixels"] = min_pixels
     if max_pixels is not None:
         img["max_pixels"] = max_pixels
     return [{"role": "user", "content": [img, {"type": "text", "text": text}]}]
