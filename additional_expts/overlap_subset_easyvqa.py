@@ -97,6 +97,7 @@ if __name__ == "__main__":
     p.add_argument("--retain", type=float, default=RETAIN,
                    help="Top-k retention fraction (default 0.25).")
     p.add_argument("--max_pixels", type=int, default=None)
+    p.add_argument("--min_pixels", type=int, default=None)
     p.add_argument("--max_samples", type=int, default=None,
                    help="Cap total samples (debug / cost).")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
@@ -152,7 +153,7 @@ if __name__ == "__main__":
 
     def build_prompt_fn(item):
         # build_mmbench_prompt is generic (single image + text).
-        return ov.build_mmbench_prompt(item["image"], item["text"], args.max_pixels)
+        return ov.build_mmbench_prompt(item["image"], item["text"], args.max_pixels, args.min_pixels)
 
     # Every sample shares the same 13-way candidate set.
     def get_option_token_ids_fn(item):
