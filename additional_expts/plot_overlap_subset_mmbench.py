@@ -31,6 +31,8 @@ plt.rcParams.update({
     "axes.titlesize": 12, "axes.spines.top": False, "axes.spines.right": False,
 })
 
+DATASET = "EasyVQA" if "easyvqa" in IN.lower() else "MMBench (dev)"
+
 d = json.load(open(IN))
 no = np.array([x["normalized_overlap"] for x in d])
 tasks = [x["task"] for x in d]
@@ -83,7 +85,7 @@ axB.set_xlabel("normalized overlap")
 axB.set_title("By task  (◆ = task mean)", loc="left", weight="bold")
 axB.grid(axis="x", color=GRID, lw=0.8, zorder=0)
 
-fig.suptitle(f"MMBench (dev, n={len(d)}) — do answer options select the same visual tokens?",
+fig.suptitle(f"{DATASET}, n={len(d)} — do answer options select the same visual tokens?",
              x=0.01, ha="left", weight="bold", fontsize=13)
 fig.tight_layout(rect=[0, 0, 1, 0.96])
 fig.savefig(OUT, dpi=150, facecolor=SURFACE)
