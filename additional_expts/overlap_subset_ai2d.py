@@ -1,6 +1,6 @@
 """
 Does the set of "important" visual tokens change when you change which answer
-you score against?  (MMBench / single-image version of overlap_subset.py.)
+you score against?  (AI2D / single-diagram version of overlap_subset_mmbench.py.)
 
 For one multiple-choice question:
   - For each candidate option, score every visual token by how much it pushes up
@@ -21,18 +21,29 @@ Low  overlap  ->  which tokens matter flips with the answer; nothing but the ans
 Read everything against the chance level: what two random equal-size sets would
 share. With a 25% budget, chance overlap is ~0.25, NOT 0.
 
-Model: Qwen2.5-VL-3B-Instruct.   Benchmark: MMBench (lmms-lab/MMBench, dev split).
-This is the single-image analogue of the video overlap_subset.py: the visual mask
-now selects IMAGE tokens (model.config.image_token_id), samples are grouped by
-MMBench's `l2-category` (the per-task axis), and the image comes from the parquet's
-embedded PNG bytes rather than a decoded video clip.
+Model: Qwen2.5-VL-3B-Instruct.   Benchmark: AI2D (lmms-lab/ai2d, test split).
+AI2D is science-diagram QA, so it stresses a different regime than MMBench's natural
+images: the answer-bearing evidence is often a small label or arrow rather than a
+salient object. Differences from the MMBench script are all in the data layer:
+
+  * the test split HAS answers (unlike MMBench's, which are withheld), so `test` is
+    the split to run and there is no dev/test choice to make;
+  * options live in a single `options` list column, not in A/B/C/D columns, so the
+    letters are positional (chr('A') + i);
+  * `answer` is the INDEX of the correct option stored as a string ("0".."3") --
+    lmms-eval reads it as int(doc["answer"]) -- not a letter;
+  * there is no `l2-category` / `hint` column, so every sample carries the same
+    task label and the per-task table collapses to one row (the overall line is
+    the result);
+  * the split is sharded (test-0000x-of-0000n.parquet) -- ALL shards are read;
+  * images are decoded lazily, per sample, because the full test split is ~3k
+    diagrams and holding them all as RGB PIL objects is gigabytes.
 
 Run:
-    python overlap_subset_mmbench.py \
-        --data_root ~/datasets/MMBench \
-        --split dev \
+    python overlap_subset_ai2d.py \
+        --data_root ~/Experiments/AI2D \
         --max_samples 200 \
-        --out results_overlap_subset_mmbench.json
+        --out results_overlap_subset_ai2d.json
 """
 
 import torch
@@ -46,8 +57,8 @@ MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 RETAIN   = 0.25      # keep the top 25% of visual tokens
 
 SYSTEM_PROMPT = (
-    "Carefully look at the image and pay attention to the objects, their "
-    "attributes, spatial relations, and any text present. Based on your "
+    "Carefully look at the diagram and pay attention to the objects, their "
+    "labels, spatial relations, arrows, and any text present. Based on your "
     "observations, select the best option that accurately addresses the question."
 )
 
@@ -113,7 +124,7 @@ def topk_set(score, visual_mask, retain=RETAIN):
 def overlap_for_sample(messages, option_token_ids):
     """option_token_ids: first-answer-token ids for each candidate option, in the same
     form your accuracy eval compares (e.g. the ids of 'A','B','C','D').
-    messages: pre-built chat messages list (single image + question)."""
+    messages: pre-built chat messages list (single diagram + question)."""
     inputs = build_inputs(messages)
     visual_mask = (inputs.input_ids[0] == IMAGE_TOKEN_ID)
 
@@ -153,10 +164,10 @@ def stability_under_noise(messages, target_token_id, sigma=0.02):
 
 def run(items, build_prompt, get_option_token_ids):
     """
-    items: iterable from the MMBench loader.
-    build_prompt(item)            -> pre-built messages list (single image + question)
+    items: iterable from the AI2D loader.
+    build_prompt(item)            -> pre-built messages list (single diagram + question)
     get_option_token_ids(item)    -> list of first-answer-token ids for the options
-    Each item must also carry item['task'] (MMBench l2-category).
+    Each item must also carry item['task'] (constant for AI2D -- no category column).
     """
     by_task, rows = defaultdict(list), []
     total = len(items) if hasattr(items, "__len__") else None
@@ -177,7 +188,7 @@ def run(items, build_prompt, get_option_token_ids):
         pbar.set_postfix(done=len(rows), mean_overlap=f"{running:+.3f}")
         torch.cuda.empty_cache()
 
-    print(f"\n{'task (l2-category)':28s}  n    norm_overlap")
+    print(f"\n{'task':28s}  n    norm_overlap")
     print(f"{'(low = answer-dependent)':28s}")
     for task in sorted(by_task, key=lambda t: sum(by_task[t]) / len(by_task[t])):
         v = by_task[task]
@@ -189,25 +200,39 @@ def run(items, build_prompt, get_option_token_ids):
 
 
 # ----------------------------------------------------------------------------- data
+#
+# This section is the shared AI2D data layer: lcds_ai2d.py imports from here, the
+# same way lcds_mmbench.py imports its data layer from overlap_subset_mmbench.py.
 
 
-OPTION_LETTERS = ["A", "B", "C", "D"]
+import glob
+import io
+import os
+
+OPTION_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 
 def _is_present(v):
-    """MMBench pads absent options with NaN/None/empty string."""
+    """Guard against padded/absent options (None / NaN / empty string)."""
     if v is None:
         return False
     s = str(v).strip()
     return bool(s) and s.lower() != "nan"
 
 
-def build_mmbench_prompt(image, text, max_pixels=None, min_pixels=None):
+def decode_image(cell):
+    """HF Image feature in parquet -> dict with 'bytes'; be tolerant of raw bytes.
+    Called at use time (not load time): the AI2D test split is ~3k diagrams and
+    decoding them all up front costs gigabytes of RGB."""
+    from PIL import Image
+    b = cell["bytes"] if isinstance(cell, dict) else cell
+    return Image.open(io.BytesIO(b)).convert("RGB")
+
+
+def build_ai2d_prompt(image, text, max_pixels=None, min_pixels=None):
     """Single-image Qwen chat prompt whose image item drives process_vision_info.
     `image` is a PIL.Image; qwen_vl_utils.fetch_image accepts PIL objects directly."""
     img = {"type": "image", "image": image}
-    if min_pixels is not None:
-        img["min_pixels"] = min_pixels
     if max_pixels is not None:
         img["max_pixels"] = max_pixels
     if min_pixels is not None:
@@ -215,51 +240,97 @@ def build_mmbench_prompt(image, text, max_pixels=None, min_pixels=None):
     return [{"role": "user", "content": [img, {"type": "text", "text": text}]}]
 
 
+def _answer_index(raw, n_options):
+    """AI2D stores the answer as the INDEX of the correct option, as a string
+    ("0".."3"); lmms-eval reads it as int(doc["answer"]). A bare letter is tolerated
+    in case a mirror stores it that way. Anything else -> -1, and the caller skips
+    the sample rather than scoring it against a wrong target."""
+    if raw is None:
+        return -1
+    s = str(raw).strip()
+    if s.isdigit():
+        i = int(s)
+        return i if 0 <= i < n_options else -1
+    if len(s) == 1 and s.upper() in OPTION_LETTERS:
+        i = OPTION_LETTERS.index(s.upper())
+        return i if 0 <= i < n_options else -1
+    return -1
+
+
 def build_prompt_text(record):
-    """MMBench option block + the letters present, and the ground-truth index.
-    Mirrors accuracy_mvbench.build_prompt but for image MC with an optional hint."""
-    letters, texts = [], []
-    for L in OPTION_LETTERS:
-        if _is_present(record.get(L)):
-            letters.append(L)
-            texts.append(str(record[L]).strip())
+    """AI2D option block + the letters present, and the ground-truth index.
+    Mirrors overlap_subset_mmbench.build_prompt_text -- same wording and same
+    "(A) text" option format, so AI2D numbers stay comparable to the MMBench ones --
+    but the options come from the positional `options` list and there is no hint."""
+    options = [str(o).strip() for o in list(record["options"]) if _is_present(o)]
+    letters = OPTION_LETTERS[:len(options)]
     lines = SYSTEM_PROMPT + "\n"
-    if _is_present(record.get("hint")):
-        lines += f"Hint: {str(record['hint']).strip()}\n"
     lines += f"Question: {str(record['question']).strip()}\nOptions:\n"
-    lines += "".join(f"({L}) {t}\n" for L, t in zip(letters, texts))
+    lines += "".join(f"({L}) {t}\n" for L, t in zip(letters, options))
     lines += "Answer with the option's letter (A, B, C, ...) directly."
-    gt = record.get("answer")
-    gt_idx = letters.index(gt) if gt in letters else -1
-    return lines, letters, gt_idx
+    return lines, letters, _answer_index(record.get("answer"), len(options))
+
+
+def load_ai2d_frame(data_root, split="test"):
+    """Concatenate every shard of the split. AI2D ships `test` as
+    test-00000-of-00002.parquet + test-00001-of-00002.parquet, so reading only the
+    first shard (as the single-shard MMBench loader does) would silently drop half
+    the benchmark."""
+    import pandas as pd
+    data_dir = os.path.join(os.path.expanduser(data_root), "data")
+    matches = sorted(glob.glob(os.path.join(data_dir, f"{split}-*.parquet")))
+    if not matches:
+        raise FileNotFoundError(f"no {split}-*.parquet under {data_dir}")
+    df = pd.concat([pd.read_parquet(m) for m in matches], ignore_index=True)
+    print(f"[data] AI2D/{split}: {len(df)} rows from {len(matches)} shard(s)")
+    return df
+
+
+def load_items(data_root, split="test", max_samples=None):
+    """-> list of items carrying the RAW image cell (decode via decode_image at use
+    time). Samples whose answer index can't be resolved are dropped, loudly."""
+    df = load_ai2d_frame(data_root, split)
+    if max_samples:
+        df = df.iloc[:max_samples]
+
+    items, dropped = [], 0
+    for i, rec in df.iterrows():
+        text, letters, gt_idx = build_prompt_text(rec)
+        if len(letters) < 2 or gt_idx < 0:
+            dropped += 1
+            continue
+        items.append({
+            "index": int(i),
+            "task": "ai2d",          # AI2D has no category column -- one bucket.
+            "image_cell": rec["image"],
+            "text": text,
+            "letters": letters,
+            "gt_idx": gt_idx,
+        })
+    if dropped:
+        print(f"[data] dropped {dropped} sample(s) with <2 options or an unresolvable answer")
+    return items
 
 
 if __name__ == "__main__":
     import argparse
-    import glob
-    import io
     import json
-    import os
 
-    import pandas as pd
-    from PIL import Image
-    from tqdm import tqdm
-
-    p = argparse.ArgumentParser(description="Per-option visual-token overlap on MMBench (single image).")
+    p = argparse.ArgumentParser(description="Per-option visual-token overlap on AI2D (single diagram).")
     p.add_argument("--data_root", required=True,
-                   help="MMBench dir holding data/ with <split>-*.parquet (lmms-lab/MMBench).")
-    p.add_argument("--split", default="dev", choices=["dev", "test"],
-                   help="MMBench split. Use 'dev' (test answers are withheld).")
-    p.add_argument("--l2_categories", nargs="+", default=["all"],
-                   help="MMBench l2-category names to keep, or 'all'.")
+                   help="AI2D dir holding data/ with <split>-*.parquet (lmms-lab/ai2d).")
+    p.add_argument("--split", default="test", choices=["test"],
+                   help="AI2D ships answers with `test`; there is no other split to use.")
     p.add_argument("--model_name", default=MODEL_ID)
     p.add_argument("--retain", type=float, default=RETAIN,
                    help="Top-k retention fraction (default 0.25).")
     p.add_argument("--max_pixels", type=int, default=None)
+    p.add_argument("--min_pixels", type=int, default=None,
+                   help="lower bound on image area, e.g. 200704 (=448^2 -> >=256 merged tokens).")
     p.add_argument("--max_samples", type=int, default=None,
-                   help="Cap total samples after category filtering (debug).")
+                   help="Cap total samples (debug).")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp16", "fp32"])
-    p.add_argument("--out", default="results_overlap_subset_mmbench.json",
+    p.add_argument("--out", default="results_overlap_subset_ai2d.json",
                    help="Output JSON path.")
     args = p.parse_args()
 
@@ -275,41 +346,11 @@ if __name__ == "__main__":
     IMAGE_TOKEN_ID = model.config.image_token_id
     DEVICE = model.device
 
-    # Load the MMBench parquet for the chosen split (HF stores the image as a
-    # struct {bytes, path}; we decode the PNG bytes to a PIL image).
-    data_dir = os.path.join(os.path.expanduser(args.data_root), "data")
-    matches = sorted(glob.glob(os.path.join(data_dir, f"{args.split}-*.parquet")))
-    if not matches:
-        raise FileNotFoundError(f"no {args.split}-*.parquet under {data_dir}")
-    df = pd.read_parquet(matches[0])
-
-    if args.l2_categories != ["all"]:
-        keep = set(args.l2_categories)
-        df = df[df["l2-category"].isin(keep)]
-    if args.max_samples:
-        df = df.iloc[:args.max_samples]
-
-    def _decode_image(cell):
-        # HF Image feature in parquet -> dict with 'bytes'; be tolerant of raw bytes.
-        b = cell["bytes"] if isinstance(cell, dict) else cell
-        return Image.open(io.BytesIO(b)).convert("RGB")
-
-    items = []
-    for _, rec in tqdm(df.iterrows(), total=len(df), desc=f"Loading MMBench/{args.split}"):
-        text, letters, gt_idx = build_prompt_text(rec)
-        if len(letters) < 2:
-            continue
-        items.append({
-            "index": rec.get("index"),
-            "task": rec.get("l2-category", "unknown"),
-            "image": _decode_image(rec["image"]),
-            "text": text,
-            "letters": letters,
-            "gt_idx": gt_idx,
-        })
+    items = load_items(args.data_root, args.split, args.max_samples)
 
     def build_prompt_fn(item):
-        return build_mmbench_prompt(item["image"], item["text"], args.max_pixels)
+        return build_ai2d_prompt(decode_image(item["image_cell"]), item["text"],
+                                 args.max_pixels, args.min_pixels)
 
     def get_option_token_ids_fn(item):
         return [processor.tokenizer.encode(L, add_special_tokens=False)[0]

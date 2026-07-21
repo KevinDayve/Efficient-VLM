@@ -1,39 +1,42 @@
 """
-lcds_mmbench.py -- Layer-Consensus Diverse Selection, inference-only, on MMBench.
+lcds_mmbench.py -- Layer-Collected Diverse Selection, inference-only, on MMBench.
 ================================================================================
 A training-free visual-token selection method, tested as a SELECTION strategy
 (no in-LLM pruning yet): compute the selection from one dense forward, then score
-the multiple-choice answer through the frozen model on the kept token subset, and
-compare accuracy + spatial dispersion against uniform and vanilla attention-top-K.
+the multiple-choice answer through the frozen model on the kept token subset.
 
-The method (your diagram, made concrete):
+The method:
 
   dense image tokens
         |
-        v   at every prune layer m  (progressive, monotone)
-  [debiased attention top-K]   keep top-rho_m of the SURVIVING tokens by
-        |                      r_m = A_m - proj_B(A_m), where B is the positional
-        |                      attention template captured from the EARLY layers.
-        |                      (subtracting the early-layer positional bias is the
-        |                       whole reason this can beat uniform; raw attention
-        |                       top-K does not -- see inference_only.py.)
+        v   at every k-th LLM layer  (independent, NO dropping)
+  [text->vision attention top-C]   record the top-C image tokens by the attention
+        |                          they RECEIVE from the text queries. No cascade,
+        |                          no monotone shrink -- each selected layer votes
+        |                          independently on its top candidates.
+        v   union across layers
+  [candidate pool]                 tokens that ANY selected layer ranked highly.
+        |
         v   at the final layer
-  [maximal-distance selection] farthest-point sampling on the final-layer features
-        |                      of the survivors -> k diverse anchors (drops
-        v                      geometric/semantic redundancy; the World-2 hedge).
+  [diversity selection]            on the FINAL-layer features of the pool, pick k
+        |                          diverse tokens -- either farthest-point (Max-Min)
+        v                          OR a conditional DPP-MAP (CDPruner, arXiv:2506.10967)
+                                   whose relevance weight is the attention salience.
   kept subset -> score answer
 
-Strategies reported (so one run attributes every gain):
-  * uniform         : evenly spaced tokens over the merged grid          (floor)
-  * attention_topk  : band-averaged raw attention, global top-K          (FastV-ish)
-  * lcds            : debiased cascade + farthest-point diversity        (ours)
-  * lcds_nodebias   : ours but with RAW attention in the cascade         (ablate debias)
-  * lcds_nodiv      : ours but final = top-K by salience, no diversity   (ablate diversity)
+Strategies reported (baselines for context; the method is the star):
+  * uniform         : evenly spaced tokens over the merged grid              (floor)
+  * attention_topk  : select-layers-averaged raw attention, global top-K     (foil)
+  * lcds            : per-layer top-attention pool + farthest-point diversity (ours)
+  * lcds_dpp        : same pool + conditional DPP-MAP diversity (CDPruner)    (ours)
+  * lcds_mmr        : same pool + Maximal Marginal Relevance at --mmr_lambda  (ours)
+                      lam=1 is attention_topk, lam=0 is pure repulsion, so a lam sweep
+                      spans both endpoints at 1/rho the cost of the DPP Gram.
 
 Run:
     python lcds_mmbench.py \
         --data_root ~/datasets/MMBench --split dev \
-        --max_samples 300 --rhos 0.05,0.10,0.25 \
+        --max_samples 300 --rhos 0.05,0.10,0.25 --layer_stride 4 \
         --out results_lcds_mmbench.json
 """
 
@@ -59,7 +62,7 @@ from oracle_check import score_answer
 # MMBench data layer / prompt (single image, l2-category grouping, parquet PNG bytes).
 from overlap_subset_mmbench import build_mmbench_prompt, build_prompt_text
 
-STRATEGIES = ("uniform", "attention_topk", "lcds", "lcds_nodebias", "lcds_nodiv")
+STRATEGIES = ("uniform", "attention_topk", "lcds", "lcds_dpp", "lcds_mmr")
 
 
 # --------------------------------------------------------------------------- #
@@ -82,7 +85,7 @@ def build_image_positions(model, input_ids, image_positions, image_grid_thw, att
 
 
 # --------------------------------------------------------------------------- #
-# per-layer language->image attention (received attention per image token)
+# per-layer text->vision attention (attention each image token RECEIVES)
 # --------------------------------------------------------------------------- #
 def received_attention(attentions, image_positions, layers):
     """{layer -> (M,)}: attention each image token RECEIVES from text queries,
@@ -95,52 +98,6 @@ def received_attention(attentions, image_positions, layers):
         a = attentions[L][0].mean(0)                     # (S,S) head-mean
         out[L] = a[text_mask][:, image_positions].sum(dim=0).float()  # (M,)
     return out
-
-
-# --------------------------------------------------------------------------- #
-# debias: remove the early-layer positional template (least squares residual)
-# --------------------------------------------------------------------------- #
-def build_bias_basis(received, bias_layers, M, device):
-    """Design matrix Phi = [1 | B_l0 | B_l1 | ...] over image tokens; the early
-    layers are ~content-free positional bias, so projecting onto their span and
-    taking the residual removes the positional component."""
-    cols = [torch.ones(M, device=device)]
-    for L in bias_layers:
-        cols.append(received[L])
-    return torch.stack(cols, dim=1)                       # (M, 1+n_bias)
-
-
-def debias_vec(a, Phi):
-    """residual of a after least-squares projection onto columns of Phi. Using a
-    regression residual (not raw subtraction) auto-scales the basis -- essential
-    for the null-prompt basis, whose magnitude differs (different #text tokens)."""
-    sol = torch.linalg.lstsq(Phi.float(), a.float().unsqueeze(1)).solution
-    return a.float() - (Phi.float() @ sol).squeeze(1)
-
-
-@torch.no_grad()
-def null_received(model, processor, image, null_text, max_pixels, layers,
-                  image_token_id, device):
-    """Null-prompt positional/agnostic template: run the SAME image with a generic
-    query and return {layer -> received attention (M,)} plus M. Subtracting this
-    (via debias_vec) removes positional bias AND question-agnostic saliency,
-    isolating the query-specific signal. Costs one extra forward per sample."""
-    messages = build_mmbench_prompt(image, null_text, max_pixels)
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    img_in, vid_in = process_vision_info(messages)
-    inputs = processor(text=[text], images=img_in, videos=vid_in, return_tensors="pt")
-    input_ids = inputs["input_ids"].to(device)
-    attn = inputs["attention_mask"].to(device)
-    pixel_values = inputs["pixel_values"].to(device)
-    image_grid_thw = inputs["image_grid_thw"].to(device)
-    ipos = (input_ids[0] == image_token_id).nonzero(as_tuple=False).flatten()
-    pos = build_image_positions(model, input_ids, ipos, image_grid_thw, attn)
-    out = model(input_ids=input_ids, attention_mask=attn, position_ids=pos,
-                pixel_values=pixel_values, image_grid_thw=image_grid_thw,
-                use_cache=False, output_attentions=True)
-    recv = received_attention(out.attentions, ipos, set(layers))
-    del out
-    return recv, ipos.numel()
 
 
 # --------------------------------------------------------------------------- #
@@ -186,42 +143,113 @@ def farthest_point(feats, seed_scores, k):
     return torch.tensor(sorted(sel), device=feats.device)
 
 
+def mmr(feats, relevance, k, lam=0.5, eps=1e-6):
+    """Maximal Marginal Relevance (Carbonell & Goldstein 1998): greedily add the token
+    maximizing  lam*rel_i - (1-lam)*max_{j in S} sim(i,j)  -- the most salient token that
+    is least like everything already chosen.
+
+    Interpolates the two strategies already reported here, so ONE knob sweeps the whole
+    relevance/diversity axis instead of testing two isolated points on it:
+        lam=1 -> pure relevance argmax   (== attention_topk, restricted to the pool)
+        lam=0 -> pure Max-Min repulsion  (== farthest_point's update rule)
+    A lam sweep therefore subsumes both endpoints; read it as a curve, not a third point.
+
+    Costs O(n k d): the max-similarity vector is carried incrementally, so unlike dpp_map
+    the n x n Gram is never materialized -- cheaper by a factor 1/rho (10x at rho=0.1).
+    Irrelevant while the picker runs once per forward, decisive if it is ever moved onto
+    a per-layer path where it would run at every routed layer.
+
+    `relevance` is min-max normalized to [0,1] so lam trades it against a cosine
+    similarity on a comparable scale. Same (feats, relevance, k) -> LOCAL indices
+    contract as farthest_point / dpp_map."""
+    n = feats.shape[0]
+    if k >= n:
+        return torch.arange(n, device=feats.device)
+    X = F.normalize(feats.float(), dim=1)
+    r = relevance.float()
+    r = (r - r.min()) / (r.max() - r.min() + eps)         # min-max -> [0,1]
+    sel = [int(r.argmax())]                               # seed at the most salient token
+    maxsim = X @ X[sel[0]]                                # (n,) running max sim to S
+    for _ in range(k - 1):
+        score = lam * r - (1.0 - lam) * maxsim
+        score[torch.tensor(sel, device=feats.device)] = -float("inf")
+        j = int(score.argmax())
+        sel.append(j)
+        maxsim = torch.maximum(maxsim, X @ X[j])          # incremental: no n x n Gram
+    return torch.tensor(sorted(sel), device=feats.device)
+
+
+def dpp_map(feats, relevance, k, eps=1e-6):
+    """Greedy MAP inference for a CONDITIONAL DPP (Chen et al. 2018 fast greedy;
+    CDPruner, arXiv:2506.10967). The kernel is L = diag(r) K diag(r) with K the
+    cosine-similarity Gram of `feats` (Eq.3) and r a min-max-normalized relevance
+    weight (Eq.5-7), so the greedy maximizes
+        log det(L_S) = sum_{i in S} log r_i^2 + log det(K_S)          (Eq.8)
+    -- i.e. jointly HIGH relevance and LOW mutual similarity. Unlike farthest_point
+    (Max-Min, nearest-neighbour), DPP scores the whole Gram VOLUME -> global, more
+    balanced diversity, and it USES the relevance weight in the objective (not just
+    as a seed). Here r = the text->vision attention salience. Returns LOCAL indices."""
+    n = feats.shape[0]
+    if k >= n:
+        return torch.arange(n, device=feats.device)
+    X = F.normalize(feats.float(), dim=1)
+    K = X @ X.t()                                        # cosine Gram (n,n), PSD
+    r = relevance.float()
+    r = (r - r.min()) / (r.max() - r.min() + eps)        # min-max -> [0,1]   (Eq.6)
+    r = r.clamp_min(eps)                                 # keep every self-quality > 0
+    L = r.unsqueeze(1) * K * r.unsqueeze(0)              # conditional kernel (Eq.7)
+    d2 = torch.diagonal(L).clone()                       # d_i^2 = L_ii (Schur diag)
+    c = torch.zeros(n, k, device=feats.device)           # incremental Cholesky rows
+    sel = [int(torch.argmax(d2))]
+    for t in range(k - 1):                               # add one item per step
+        j = sel[-1]
+        e = (L[j] - c[:, :t] @ c[j, :t]) / torch.sqrt(d2[j].clamp_min(eps))  # (n,)
+        c[:, t] = e
+        d2 = d2 - e * e                                  # Schur-complement update
+        d2[torch.tensor(sel, device=feats.device)] = -float("inf")
+        sel.append(int(torch.argmax(d2)))
+    return torch.tensor(sorted(sel), device=feats.device)
+
+
 # --------------------------------------------------------------------------- #
-# the cascade: progressive (debiased) attention top-K over the surviving set
+# the method: collect per-layer top-attention candidates (no dropping), then
+# diversity-select k of them in the final-layer feature space.
 # --------------------------------------------------------------------------- #
-def cascade(received, prune_layers, phi_by_layer, M, cand, device, debias_on):
-    """Monotone shrink M -> cand across prune_layers. Returns (surviving_idx,
-    aggregated_salience over ALL M). Aggregated salience is the per-layer signal
-    averaged over prune layers -- used for the FPS seed and the no-diversity ablation.
-    phi_by_layer[L] is the debias basis for layer L (shared for 'project', per-layer
-    null map for 'null_prompt')."""
-    surviving = torch.arange(M, device=device)
-    n = len(prune_layers)
+def collect_candidates(received, select_layers, M, cand, device):
+    """Union of the top-`cand` text->vision-attention tokens at EACH selected layer
+    (no dropping / no monotone cascade -- each layer votes independently). Returns
+    (pool_idx over 0..M-1, aggregated salience over ALL M). Aggregated salience is
+    the per-layer received attention summed over the selected layers -- used as the
+    FPS seed."""
+    pool = torch.zeros(M, dtype=torch.bool, device=device)
     sal = torch.zeros(M, device=device)
-    for i, L in enumerate(prune_layers):
-        a = debias_vec(received[L], phi_by_layer[L]) if debias_on else received[L]
+    for L in select_layers:
+        a = received[L]
         sal += a
-        # geometric schedule M -> cand; last step lands exactly on cand
-        target = round(M * (cand / M) ** ((i + 1) / n))
-        target = cand if i == n - 1 else max(cand, target)
-        target = min(target, surviving.numel())
-        keep_local = torch.topk(a[surviving], target).indices
-        surviving = surviving[keep_local]
-    return surviving.sort().values, sal / n
+        top = torch.topk(a, min(cand, M)).indices
+        pool[top] = True
+    return pool.nonzero(as_tuple=False).flatten().sort().values, sal / max(1, len(select_layers))
 
 
-def lcds_select(strategy, received, feats, prune_layers, phi_by_layer, M, k, cand_mult, device):
-    """Full method (and its ablations) -> kept image-token indices (0..M-1)."""
+def lcds_select(received, feats, select_layers, M, k, cand_mult, device, diversity="fps",
+                mmr_lambda=0.5):
+    """Take every k-th layer's top-attention tokens (no drop), union into a candidate
+    pool, then diversity-select k of them in the final-layer feature space -> kept
+    image-token indices (0..M-1). diversity: 'fps' = farthest-point (Max-Min),
+    'dpp' = conditional DPP-MAP (CDPruner) seeded/weighted by attention salience,
+    'mmr' = Maximal Marginal Relevance at `mmr_lambda` (spans attention_topk at lam=1
+    and pure repulsion at lam=0, at 1/rho the cost of 'dpp')."""
     if k >= M:
         return torch.arange(M, device=device)
-    cand = min(M, max(k, int(round(cand_mult * k))))
-    debias_on = (strategy != "lcds_nodebias")
-    surviving, sal = cascade(received, prune_layers, phi_by_layer, M, cand, device, debias_on)
-    if strategy == "lcds_nodiv":                          # final = top-K by salience
-        local = select_topk(sal[surviving], k)
-    else:                                                 # final = maximal-distance
-        local = farthest_point(feats[surviving], sal[surviving], k)
-    return surviving[local].sort().values
+    cand = min(M, max(k, int(round(cand_mult * k))))       # per-layer candidate count
+    pool, sal = collect_candidates(received, select_layers, M, cand, device)
+    if diversity == "dpp":
+        local = dpp_map(feats[pool], sal[pool], k)
+    elif diversity == "mmr":
+        local = mmr(feats[pool], sal[pool], k, lam=mmr_lambda)
+    else:
+        local = farthest_point(feats[pool], sal[pool], k)
+    return pool[local].sort().values
 
 
 # --------------------------------------------------------------------------- #
@@ -302,7 +330,7 @@ def main(args):
     items = load_items(args.data_root, args.split, args.l2_categories, args.max_samples)
 
     # layer plan resolved lazily once we know n_layers.
-    bias_layers = prune_layers = feature_hs_idx = None
+    select_layers = feature_hs_idx = None
 
     correct = {s: {r: 0 for r in rhos} for s in STRATEGIES}
     disp = {s: {r: [] for r in rhos} for s in STRATEGIES}
@@ -312,7 +340,7 @@ def main(args):
     from tqdm import tqdm
     for it in tqdm(items, desc="eval"):
         letter_ids = [processor.tokenizer.encode(L, add_special_tokens=False)[0] for L in it["letters"]]
-        messages = build_mmbench_prompt(it["image"], it["text"], args.max_pixels)
+        messages = build_mmbench_prompt(it["image"], it["text"], args.max_pixels, args.min_pixels)
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         img_in, vid_in = process_vision_info(messages)
         inputs = processor(text=[text], images=img_in, videos=vid_in, return_tensors="pt")
@@ -334,43 +362,29 @@ def main(args):
         attentions = out.attentions
         base = out.hidden_states[0].detach()              # merged inputs_embeds (1,S,d)
 
-        if bias_layers is None:                           # resolve the layer plan once
+        if select_layers is None:                         # resolve the layer plan once
             L = len(attentions)
-            bias_layers = [x for x in ([int(v) for v in args.bias_layers.split(",")]
-                                       if args.bias_layers else [0, 1, 2]) if x < L]
-            if args.prune_stride > 0:                      # prune at every k-th layer
-                prune_layers = list(range(args.prune_stride, L, args.prune_stride))
-            elif args.prune_layers:
-                prune_layers = [int(v) for v in args.prune_layers.split(",")]
-            else:
-                prune_layers = [round(L * f) for f in (0.4, 0.6, 0.8)]
-            prune_layers = sorted({min(x, L - 1) for x in prune_layers})
-            fl = args.feature_layer if args.feature_layer >= 0 else prune_layers[-1]
-            feature_hs_idx = min(fl + 1, len(out.hidden_states) - 1)  # hidden_states[l+1] = layer l out
-            print(f"[plan] n_layers={L} debias={args.debias} bias={bias_layers} "
-                  f"prune={prune_layers} feature_hs_idx={feature_hs_idx}")
+            if args.layers:                               # explicit override
+                select_layers = [int(v) for v in args.layers.split(",")]
+            else:                                         # every k-th LLM layer
+                select_layers = list(range(args.layer_stride, L, args.layer_stride))
+            select_layers = sorted({min(x, L - 1) for x in select_layers})
+            if not select_layers:
+                select_layers = [L - 1]
+            # diversity features come from the FINAL layer by default (hidden_states[-1]);
+            # --feature_layer l overrides -> hidden_states[l+1] (layer l output).
+            feature_hs_idx = (len(out.hidden_states) - 1 if args.feature_layer < 0
+                              else min(args.feature_layer + 1, len(out.hidden_states) - 1))
+            print(f"[plan] n_layers={L} layer_stride={args.layer_stride} "
+                  f"select_layers={select_layers} feature_hs_idx={feature_hs_idx}")
 
         feats = out.hidden_states[feature_hs_idx][0].detach()        # (S,d)
-        feats_img = feats[ipos]                                       # (M,d)
-        # vanilla attention_topk uses the SAME layers as the cascade, band-averaged
-        # and un-debiased -- the fair "raw attention" foil.
-        need = set(prune_layers) | (set(bias_layers) if args.debias == "project" else set())
-        recv = received_attention(attentions, ipos, need)
-        band = torch.stack([recv[L] for L in prune_layers]).mean(0)
+        feats_img = feats[ipos]                                      # (M,d)
+        # attention_topk foil: raw received attention averaged over the SAME select
+        # layers, then global top-K (single pool, no per-layer union, no diversity).
+        recv = received_attention(attentions, ipos, set(select_layers))
+        band = torch.stack([recv[L] for L in select_layers]).mean(0)
         del out, attentions
-
-        # debias basis per prune layer (see --debias).
-        if args.debias == "project":                      # early-layer positional template (no extra fwd)
-            Phi = build_bias_basis(recv, bias_layers, M, device)
-            phi_by_layer = {L: Phi for L in prune_layers}
-        else:                                             # null_prompt: same image, generic query
-            null_recv, M_null = null_received(model, processor, it["image"], args.null_text,
-                                              args.max_pixels, prune_layers, image_token_id, device)
-            if M_null != M:
-                print(f"skip: null-prompt M {M_null} != {M} (grid mismatch)"); continue
-            ones = torch.ones(M, 1, device=device)
-            phi_by_layer = {L: torch.cat([ones, null_recv[L].to(device).unsqueeze(1)], dim=1)
-                            for L in prune_layers}
 
         Hm, Wm = grid_dims(M, image_grid_thw, merge)
 
@@ -387,8 +401,9 @@ def main(args):
                 elif s == "attention_topk":
                     keep = select_topk(band, k)
                 else:
-                    keep = lcds_select(s, recv, feats_img, prune_layers, phi_by_layer, M, k,
-                                       args.cand_mult, device)
+                    div = {"lcds_dpp": "dpp", "lcds_mmr": "mmr"}.get(s, "fps")
+                    keep = lcds_select(recv, feats_img, select_layers, M, k,
+                                       args.cand_mult, device, div, args.mmr_lambda)
                 lp = score_answer(model, base, pos, attn, ipos, keep, letter_ids)
                 correct[s][rho] += int(lp.argmax().item() == it["gt_idx"])
                 d = mean_dispersion(keep, Hm, Wm)
@@ -405,7 +420,7 @@ def main(args):
         print("no usable samples."); return
 
     out_json = {"n": n, "full_accuracy": full_correct / n, "rhos": rhos,
-                "debias": args.debias, "bias_layers": bias_layers, "prune_layers": prune_layers,
+                "layer_stride": args.layer_stride, "select_layers": select_layers,
                 "feature_hs_idx": feature_hs_idx, "cand_mult": args.cand_mult, "table": {}}
     print(f"\n==== LCDS on MMBench ({n} samples) ====")
     print(f"full-model accuracy: {full_correct/n:.4f}\n")
@@ -421,35 +436,41 @@ def main(args):
     with open(args.out, "w") as f:
         json.dump(out_json, f, indent=2)
     print(f"\nsaved -> {args.out}")
-    print("\nread: lcds > uniform => the method beats the floor attention_topk can't.")
-    print("      lcds > lcds_nodebias => de-biasing the early-layer positional prior earns its keep.")
-    print("      lcds > lcds_nodiv    => the maximal-distance diversity head earns its keep.")
+    print("\nread: lcds > uniform         => the method beats the content-free floor.")
+    print("      lcds > attention_topk  => the per-layer top-attention pool + final-layer")
+    print("                                diversity beats a single-pool raw attention top-K.")
+    print("      lcds_dpp vs lcds       => does conditional DPP-MAP (volume/global diversity,")
+    print("                                relevance-weighted) beat farthest-point (Max-Min)?")
+    print("      lcds_mmr (sweep lam)   => WHERE on the relevance<->diversity axis the optimum")
+    print("                                sits. lam=1 reproduces attention_topk, lam=0 is pure")
+    print("                                repulsion, so one sweep subsumes both endpoints -- at")
+    print("                                1/rho the cost of dpp. Read it as a curve, not a point.")
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Layer-Consensus Diverse Selection on MMBench (inference-only).")
+    p = argparse.ArgumentParser(description="Layer-Collected Diverse Selection on MMBench (inference-only).")
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-3B-Instruct")
     p.add_argument("--data_root", required=True, help="MMBench dir with data/<split>-*.parquet.")
     p.add_argument("--split", default="dev", choices=["dev", "test"])
     p.add_argument("--l2_categories", nargs="+", default=["all"])
     p.add_argument("--rhos", default="0.05,0.10,0.25")
-    p.add_argument("--debias", choices=["project", "null_prompt"], default="project",
-                   help="'project': residual off early-layer template (no extra fwd). "
-                        "'null_prompt': residual off a same-image generic-query attention map "
-                        "(one extra fwd/sample; removes positional + question-agnostic saliency).")
-    p.add_argument("--null_text", default="Describe the image.",
-                   help="generic query for the --debias null_prompt template.")
-    p.add_argument("--bias_layers", default="", help="early positional-template layers (default 0,1,2).")
-    p.add_argument("--prune_layers", default="", help="cascade prune layers (default ~0.4,0.6,0.8*depth).")
-    p.add_argument("--prune_stride", type=int, default=0,
-                   help="if >0, cluster/prune at every k-th layer (overrides --prune_layers). e.g. 4.")
+    p.add_argument("--layer_stride", type=int, default=4,
+                   help="take the top text->vision attention at every k-th LLM layer (k = this).")
+    p.add_argument("--layers", default="",
+                   help="explicit select-layer list (overrides --layer_stride), e.g. 4,8,12,16.")
     p.add_argument("--feature_layer", type=int, default=-1,
                    help="decoder layer whose hidden states drive the final maximal-distance "
-                        "selection (default = last prune layer; pass 35 for 3B's final layer). "
-                        "Values >= depth clamp to the final layer.")
+                        "selection (default = final layer). Values >= depth clamp to the final layer.")
     p.add_argument("--cand_mult", type=float, default=2.0,
-                   help="candidate superset size before the final diversity selection = cand_mult*k.")
+                   help="per-layer candidate count = cand_mult*k (union across layers is the pool "
+                        "the final diversity step selects k from). cand_mult=1 => literal top-k/layer.")
+    p.add_argument("--mmr_lambda", type=float, default=0.5,
+                   help="MMR relevance/diversity trade-off used by the lcds_mmr strategy: 1.0 = "
+                        "pure attention salience (reproduces attention_topk on the pool), 0.0 = "
+                        "pure repulsion. Sweep it -- lcds_mmr is a curve, not a point.")
     p.add_argument("--max_pixels", type=int, default=None)
+    p.add_argument("--min_pixels", type=int, default=None,
+                   help="lower bound on image area, e.g. 200704 (=448^2 -> >=256 merged tokens).")
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
     p.add_argument("--out", default="results_lcds_mmbench.json")

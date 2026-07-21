@@ -124,7 +124,7 @@ def official_frames(path, data_type, has_bound, record, num_segments):
 
 
 def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, max_pixels,
-                        fps, official=False, num_segments=16):
+                        fps, official=False, num_segments=16, min_pixels=None):
     """Qwen chat prompt whose video item drives process_vision_info (the project sampler).
 
     With ``official=True`` the video item is an explicit list of ``num_segments``
@@ -144,6 +144,8 @@ def make_mvbench_prompt(path, data_type, has_bound, record, text, max_frames, ma
             vid["video_end"] = record["end"]
     if max_pixels is not None:
         vid["max_pixels"] = max_pixels
+    if min_pixels is not None:
+        vid["min_pixels"] = min_pixels
     return [{"role": "user", "content": [vid, {"type": "text", "text": text}]}]
 
 
