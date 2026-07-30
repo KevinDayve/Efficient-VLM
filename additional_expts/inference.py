@@ -73,6 +73,9 @@ DATA_LIST = {
     "Egocentric Navigation": ("egocentric_navigation.json", "vlnqa/", "video", False),
     "Episodic Reasoning": ("episodic_reasoning.json", "tvqa/frames_fps3_hq/", "frame", True),
     "Counterfactual Inference": ("counterfactual_inference.json", "clevrer/video_validation/", "video", False),
+    # EgoSchema (long-form egocentric, 500-question Subset): built by make_egoschema_json.py.
+    # subdir="" -> path = <data_root>/video/<uuid>.mp4 (symlink <root>/video -> videos/videos).
+    "EgoSchema": ("egoschema.json", "", "video", False),
 }
 
 SYSTEM_PROMPT = (

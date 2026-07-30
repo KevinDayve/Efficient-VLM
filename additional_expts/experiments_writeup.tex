@@ -1,0 +1,1166 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\newcommand{\gm}{\gamma}
+\newcommand{\gkeep}{\gamma_{\mathrm{keep}}}
+\newcommand{\gcopy}{\gamma_{\mathrm{copy}}}
+
+\title{\textbf{Where does the ``prunable structure'' live in a video VLM?}\\[2pt]
+\large A tail-index study of encoder redundancy vs.\ decoder attention\\ in Qwen2.5-VL on MVBench, replicated on long-form EgoSchema}
+\author{Efficient-VLM experiments log}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Video vision--language models (VLMs) turn every frame into hundreds of ``visual
+tokens,'' most of which are believed to be redundant. If we could rank tokens by
+importance and keep only a few, inference would be much cheaper. This document records a
+sequence of small experiments on one precise question: \emph{is visual-token importance
+really concentrated in a small, separable subset---so that ranking works---and if so, at
+which stage of the model does that concentration first appear?} We measure concentration
+with a statistical \emph{tail index}, not just an inequality score, at three pipeline
+stages: the vision encoder's raw geometry, the encoder output combined with the text
+query, and the language decoder's own attention.
+
+The headline result is that the \emph{rankable} structure appears sharply only inside the
+language decoder; the vision encoder carries only a diffuse, uniform redundancy. Two
+follow-ups refine this. First, the decoder's importance is \emph{largely
+query-invariant}: it is a fixed visual-saliency prior, not question-adaptive selection.
+Second, a cheap encoder$\times$query score \emph{does} moderately predict it at the token
+level, so a pre-LLM proxy is coarse but real.
+
+Five accuracy-side probes then ask whether any of this is \emph{exploitable}. (i) A
+one-frame-vs.-all-frames probe shows the temporal lever is frame \emph{selection}, not
+accumulation: a well-chosen single frame beats all frames. (ii) A direct pruning
+probe---keep the top-$\rho$ tokens by each scorer, prune at the input, measure MVBench
+accuracy---gives the decisive negative. Ranking tokens by the decoder's own importance
+does \emph{no better than random}, and about 3 pts \emph{below} it at aggressive
+$1$--$10\%$ budgets, exactly where selection should matter most. So the decoder's
+concentration is real but \emph{not causally exploitable} for token selection. (iii) The
+frame lever is also hard to use: a chosen frame is a real oracle-level win, but no cheap
+per-frame score picks it (the decoder's own concentration is even
+\emph{anti}-correlated). Only the LLM's answer-confidence marks the answer frame, and only
+weakly, at the cost of a per-frame forward. (iv) A temporal \emph{change-point} in the
+query-guided attention does not localize the answer either, and carries no more signal
+than the plain attention \emph{level}. (v) An external contrastive (SigLIP) match clears
+chance only on selection-shaped tasks and, even when handed the correct answer, no more
+than ties the LLM's confidence. Answerability is a functional property, not a
+retrieval-shaped one.
+
+The deployable direction that survives is uniform / recoverable compression, not
+importance-ranked selection at the token or the frame level. \emph{All seven findings
+replicate on long-form EgoSchema} (500-question Subset, $\sim$3-minute egocentric clips):
+the encoder stays uniform, and the decoder stays concentrated but not causally
+exploitable. Two effects are if anything \emph{stronger} at long context---the
+frame-selection lever (a chosen frame beats all frames by even more, at matched frame
+count) and answer-confidence as the sole marker of the answer frame---so none of the
+negatives are a short-clip artifact.
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Motivation and the question}
+%======================================================================
+
+A Qwen2.5-VL model processes a video by (i) splitting each frame into patches,
+(ii) running them through a \textbf{vision encoder} (a plain vision transformer,
+ViT), (iii) merging each $2\times2$ block of patches and projecting the result
+into the language model's embedding space (the \textbf{projector}/merger), and
+(iv) feeding those \textbf{visual tokens}, together with the text of the question,
+into the \textbf{language decoder}. A 16-frame clip easily produces $10^4$ visual
+tokens, dominating the compute.
+
+The standard efficiency idea is \emph{token pruning}: score each visual token,
+keep the top few, drop the rest. Pruning only helps if importance is
+\textbf{concentrated}---if a small, clearly separable subset of tokens carries most
+of the signal. If instead every token is ``somewhat'' important, ranking buys
+nothing over keeping a uniform sample. Our central question:
+\begin{quote}
+\emph{Is visual-token importance concentrated enough to rank on, and at which
+stage of the pipeline (encoder geometry / encoder$+$query / decoder attention)
+does that concentration first become available?}
+\end{quote}
+
+%======================================================================
+\section{The measurement tool: from Gini to a tail index}
+%======================================================================
+
+\paragraph{Redundancy and importance.}
+For a visual token at frame $f$ and grid cell $(r,c)$ we define its
+\emph{temporal redundancy} as the cosine similarity between its feature vector and
+that of the \emph{same cell in the previous frame}:
+$\mathrm{red} = \cos\big(x_{f,r,c},\,x_{f-1,r,c}\big)$.
+A value near $1$ means the token is a near-copy of the previous frame (redundant).
+We define \emph{importance} $=1-\mathrm{red}$: tokens that \emph{changed} are
+important. (A \emph{spatial} variant compares each token to its four in-frame
+neighbours instead.)
+
+\paragraph{Why not just the Gini coefficient.}
+The Gini coefficient measures inequality across the \emph{whole} distribution
+(0 = everything equal, 1 = all mass on one token). But pruning cares only about the
+\emph{extreme end}: are there a few tokens that stick out far above the rest? A
+distribution can have moderate Gini yet no separable extreme (a smooth ``graded''
+field), or low Gini with a genuine spike. Gini cannot tell these apart; a tail
+index can.
+
+\paragraph{The tail index $\gm$.}
+From extreme-value theory, the tail index $\gm$ describes the heaviness of a
+distribution's upper tail:
+\begin{itemize}
+\item $\gm>0$: \textbf{heavy tail}---a few extreme outliers dominate (scale-free,
+      Pareto-like). \emph{This is what ranking/top-$k$ selection needs.}
+\item $\gm\le0$: \textbf{light/bounded tail}---values pack smoothly against a
+      ceiling, no separable elite. Ranking gains nothing.
+\end{itemize}
+We estimate $\gm$ with the \textbf{Dekkers--Einmahl--de Haan moment estimator}
+(the project's \texttt{einmahlHaan}), computed on the top $k{=}10\%$ of samples.
+Unlike the Hill estimator (which assumes $\gm>0$ and always reports a heavy tail),
+the moment estimator is \emph{sign-aware}: it returns $\gm\le0$ when the tail is
+genuinely light. This matters because the project's token-budget allocator uses the
+same estimator and collapses to a \emph{uniform} budget exactly when $\gm\le0$.
+
+\paragraph{Two questions, two tails.}
+We feed the estimator two different quantities:
+\begin{itemize}
+\item $\gkeep$ = tail of \emph{importance} $(1-\mathrm{red})$. Heavy $\Rightarrow$ a
+      small ``must-keep'' elite exists $\Rightarrow$ \emph{keep-the-few} works.
+\item $\gcopy$ = tail of \emph{redundancy} itself (near $\cos=1$). Heavy $\Rightarrow$
+      a separable near-duplicate population exists $\Rightarrow$ \emph{drop-the-copies}
+      works.
+\end{itemize}
+
+\paragraph{Honesty caveat (used throughout).}
+Cosine similarity is bounded by $1$, so any cosine-derived score has a structural
+pull toward $\gm\le0$ (bounded variables live in the light-tail regime).
+Conversely, softmax attention (which sums to one over many keys) has a structural
+pull toward $\gm>0$. So the bare \emph{sign} of $\gm$ is never proof by itself; we
+rely on \emph{relative} comparisons across stages and on independent corroboration.
+
+%======================================================================
+\section{Common experimental setup}
+%======================================================================
+
+All experiments use \textbf{Qwen2.5-VL-3B-Instruct} in \texttt{bfloat16} with eager
+attention, on the same \textbf{26 MVBench video clips} spanning diverse task types
+(FunQA, Moments-in-Time, CLEVRER, perception, scene-QA, something-something,
+STA/STAR, VLN-QA). Unless noted, the tail index uses $k{=}10\%$ and the moment
+estimator. Every experiment is then \textbf{replicated on long-form EgoSchema} (the
+500-question Subset; $\sim$3-minute egocentric clips, 5-option aggregate-reasoning
+questions), reported in a dedicated ``EgoSchema replication'' paragraph within each
+section; the representation probes (Exps.~1--2) use 26 EgoSchema clips, the accuracy
+probes (Exps.~3--7) up to all 500 questions. Scripts: \texttt{encoder\_redundancy\_tailindex.py} (Exp.~1),
+\texttt{encoder\_decoder\_tail\_crossprobe.py} (Exp.~2),
+\texttt{frame\_sufficiency\_mvbench.py} (Exp.~3),\\
+\texttt{prune\_accuracy\_mvbench.py} (Exp.~4),
+\texttt{frame\_tailindex\_select\_mvbench.py} (Exp.~5),
+\texttt{frame\_attn\_changepoint\_mvbench.py} (Exp.~6),
+\texttt{frame\_clip\_select.py} (Exp.~7).
+
+\paragraph{Question / prompt format.} The five \emph{accuracy} experiments (3--7) use the
+reference MVBench multiple-choice protocol: a fixed system instruction, the question, a
+lettered option block, and a forced single-letter answer read from the option-letter
+logits. The user turn is
+
+\begin{quote}\small\ttfamily
+Carefully watch the video and pay attention to the cause and sequence of events, the
+detail and movement of objects, and the action and pose of persons. Based on your
+observations, select the best option that accurately addresses the question.\\
+Question: \{question\}\\
+Options:\\
+(A) \{option A\}\\
+(B) \{option B\}\\
+\ldots\\
+Only give the best option.
+\end{quote}
+
+\noindent followed by the assistant prefix \texttt{Best option:(}\,; the prediction is
+$\arg\max$ over the \emph{first-token} logits of the option letters (A, B, \dots), so
+accuracy never depends on free-form decoding. MVBench options vary (4 typical); EgoSchema
+always has five. This real, per-question prompt is what Exps.~3--7 use throughout---they
+must, since they score against the ground-truth answer. The two \emph{representation}
+probes, by contrast, answer nothing: Exp.~1 is \emph{query-free} (the ViT never sees text,
+so the prompt cannot affect its redundancy signal), and Exp.~2 uses a single generic prompt
+(``Describe what happens in the video.'') for its query-guided stages (3)/(4), with a
+paired \texttt{-{}-real\_query} variant that substitutes each clip's own official question
+(see the EgoSchema paragraph in \S Exp.~2). So ``question format'' matters only for
+Exps.~2--7; Exp.~1 is invariant to it.
+
+%======================================================================
+\section{Experiment 1: Is encoder redundancy concentrated?}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+We look only at the vision encoder's output (no question involved) and ask whether
+the redundancy among visual tokens is ``lumpy'' (a few near-duplicates or a few
+special tokens) or ``smooth.'' Answer: it is smooth. Redundancy is real and high on
+average, but there is \emph{no} separable subset to rank on---at either the
+adjacent-frame level or across the whole clip.
+
+\paragraph{Setup.} For each clip we take the post-merge visual features, compute
+temporal and spatial redundancy, and report the mean, the Gini, and the two tail
+indices $\gkeep,\gcopy$. We then extend to a \emph{multi-frame} view: for each
+spatial cell we examine its whole time series (the ``track'') and compute
+(a) a \emph{lag-decay} curve---mean same-cell cosine at temporal lags
+$1,2,\dots$; (b) \emph{static-to-centroid}---how close each frame is to the cell's
+temporal average; (c) \emph{effective frames} (a participation ratio of the track,
+in $[1,T]$)---how many frames the position genuinely needs.
+
+\paragraph{Results (pooled over 26 clips).}
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+signal & red.\ mean & Gini & $\gkeep$ & $\gcopy$ \\
+\midrule
+temporal (lag-1) & 0.611 & 0.339 & $-0.311$ & $-1.083$ \\
+spatial          & 0.530 & 0.145 & $-0.224$ & $-0.223$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+multi-frame (track-level) & value & tail index \\
+\midrule
+static-to-centroid (mean; $\gcopy$)        & 0.767 & $-1.029$ \\
+effective frames $/\,T$ (mean; $\gamma_{\mathrm{keep\text{-}track}}$) & 0.486 & $-0.968$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{The tail index contradicts the Gini.} Temporal redundancy has the
+      \emph{higher} Gini (0.339) but the \emph{more negative} $\gkeep$. The high
+      Gini comes from the mass of moderately-redundant tokens dragging the bottom
+      down, \emph{not} from a high-importance elite. All four tail indices are
+      $\le0$ (on every clip, not just pooled): there is no separable subset at any
+      granularity.
+\item \textbf{Redundancy is a graded field, not a copy/keep split.} High mean
+      ($0.611$) but a very light \emph{copy} tail ($\gcopy=-1.083$) means most
+      tokens are \emph{moderately} similar to the previous frame ($\sim0.5$--$0.8$),
+      with few exact copies and few fully-novel tokens.
+\item \textbf{The redundancy is global, and uniform.} The lag-decay curves are
+      nearly flat (e.g.\ $0.64\!\to\!0.62$ across 15 lags), so each position hovers
+      near its own temporal average for the whole clip---not just adjacent-frame
+      copying. Effective-frames $/\,T\approx0.486$ means about a $2\times$
+      temporal-compression headroom, but $\gamma_{\mathrm{keep\text{-}track}}\le0$
+      means that headroom is spread \emph{uniformly} across positions, with no
+      concentrated ``dynamic'' subset.
+\end{itemize}
+
+\paragraph{Conclusion.} The encoder's temporal redundancy supports at best a
+\emph{uniform} $\sim2\times$ compression (e.g.\ an anchor/centroid plus a low-rank
+residual), applied blindly. It does \emph{not} support ranking or top-$k$
+selection. The only adaptive knob is at the \emph{clip} level: effective-frames
+$/\,T$ varied $0.32$--$0.70$ across clips, so ``how many frames this video needs''
+is a legitimate per-video lever, but ``which token to keep'' is not.
+
+\paragraph{EgoSchema replication (long-form).} To test whether this
+``uniform, nothing-to-rank'' negative is an artifact of short 8-frame MVBench clips,
+we repeated the probe on \textbf{26 EgoSchema clips} (the 500-question Subset;
+$\sim$3-minute egocentric videos requiring aggregate reasoning), 32 frames,
+\texttt{max\_pixels}=200704. \emph{The core claim holds}---per clip, \emph{every}
+$\gkeep\le0$, so there is no separable must-keep elite at long context either.
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+signal & red.\ mean & Gini & $\gkeep$ & $\gcopy$ \\
+\midrule
+temporal (lag-1) & 0.485 & 0.200 & $-0.232$ & $-0.418$ \\
+spatial          & 0.557 & 0.151 & $-0.086$ & $+0.220$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+multi-frame (track-level) & value & tail index \\
+\midrule
+static-to-centroid (mean; $\gcopy$)        & 0.696 & $+0.052$ \\
+effective frames $/\,T$ (mean; $\gamma_{\mathrm{keep\text{-}track}}$) & 0.588 & $-0.370$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three reading notes:
+\begin{itemize}
+\item The pooled spatial $\gcopy=+0.220$ (and the small multi-frame $\gcopy=+0.052$) is a
+      \emph{between-clip mixture artifact}. Every individual clip has $\gcopy\le0$ ($-0.07$
+      to $-0.49$); pooling clips of differing redundancy fakes a heavy pooled tail. There
+      is no within-clip near-copy population.
+\item Temporal redundancy is lower than MVBench ($0.485$ vs $0.611$) purely from sparser
+      sampling---32 frames over $\sim$180\,s means $\sim$11\,s between Qwen's 2:1
+      temporally-merged positions---not a structural difference.
+\item Effective-frames$/T$ is \emph{higher} ($0.588$ vs $0.486$; $\sim$1.7$\times$ vs
+      $2\times$ headroom): sparse sampling has already harvested the easy temporal
+      redundancy, and what remains is still spread uniformly
+      ($\gamma_{\mathrm{keep\text{-}track}}\le0$). The per-clip frame-budget lever is not
+      only intact but \emph{wider} on long-form (effective-frames range $2.8/16$ for a
+      near-static clip to $\sim$10.7/16).
+\end{itemize}
+
+%======================================================================
+\section{Experiment 2: Where does concentration first appear?}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Experiment 1 showed the encoder \emph{geometry} is flat. But maybe concentration
+appears once we (a) look at the encoder's own attention, (b) bring in the question,
+or (c) run the language decoder. We measure a tail index at each of these stages on
+the same clips and check which stage first shows a heavy tail---\emph{and} whether
+that heavy tail actually predicts what the decoder ends up using. Answer: only the
+decoder shows a usable heavy tail, and \emph{nothing earlier predicts it}.
+
+\paragraph{The four stages measured.} Ordered by pipeline position:
+\begin{enumerate}
+\item[(1)] \textbf{pre-projector, query-free:} the ViT's own self-attention
+      importance (value-norm debiased), tail taken at the heaviest ViT layer
+      $E^{\!*}$. This is the only pre-projector signal that can be non-trivial
+      (attention can concentrate even where geometry does not).
+\item[(2)] \textbf{post-projector, query-free:} the temporal-redundancy $\gkeep$
+      from Exp.~1.
+\item[(3)] \textbf{post-projector, query-guided:} project each visual token onto the
+      (unit) mean embedding of the question tokens---an input-space
+      ``visual$\cdot$query'' similarity---and take its tail. This is the earliest
+      point at which a \emph{query}-aware score even exists, because in Qwen the ViT
+      never sees the text; visual and text share a space only \emph{after} the
+      projector.
+\item[(4)] \textbf{in-LLM, query-guided:} the decoder's debiased attention
+      importance that text positions pay to visual tokens, tail taken at the
+      heaviest decoder layer $L^{\!*}$ (via the project's \texttt{plan()} routine).
+\end{enumerate}
+A query-guided \emph{pre}-projector score does not exist in this architecture (no
+shared visual/text space before the projector), which is why the top-right cell is
+empty.
+
+\paragraph{Results (26 clips, 8 frames matched on both sides,
+\texttt{max\_pixels}=200704).}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+stage & mean $\gm$ & fraction $\gm>0$ & Spearman vs.\ decoder \\
+\midrule
+(1) pre-proj.\ ViT attn.\ @$E^{\!*}$ \; [query-free]   & $+0.466$ & 26/26 & $-0.015$ \\
+(2) post-proj.\ geometry \; [query-free]               & $-0.354$ & 0/26  & $+0.004$ \\
+(3) post-proj.\ $\times$query \; [query-guided]        & $-0.117$ & 11/26 & $-0.018$ \\
+(4) in-LLM decoder @$L^{\!*}$ \; [query-guided]        & $+0.802$ & 26/26 & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{The decoder is strongly concentrated on every clip}
+      ($\gm=+0.80$, 26/26). A small, separable, task-relevant elite of visual tokens
+      exists---but only inside the language model. $L^{\!*}$ is early (mostly
+      layer~3, some 4--6).
+\item \textbf{Pre-projector concentration exists but is the wrong kind.} The ViT's
+      own attention is heavy-tailed on every clip ($+0.47$, 26/26, in late ViT
+      layers), yet its correlation with the decoder is \emph{zero} ($\rho=-0.015$).
+      It is query-free visual \emph{saliency} (objectness), not task relevance.
+\item \textbf{The cheap query score fails.} The input-space visual$\cdot$query
+      projection (3) is heavy on only 11/26 clips and, crucially, does not correlate
+      with the decoder ($\rho=-0.018$). Qwen's projector output is \emph{not}
+      contrastively aligned to text, so an input-space dot product with the question
+      is close to meaningless. (This is where the approach differs from CLIP-based
+      grounding methods that \emph{can} score pre-LLM, because CLIP has a trained
+      shared space---see \S\ref{sec:related}.)
+\item \textbf{Nothing at the encoder predicts the decoder.} All three encoder-stage
+      signals sit at $\rho\approx0$ vs.\ the decoder. The task-relevant concentration
+      is an \emph{emergent, contextual, in-LLM} quantity, not a relabeling of any
+      encoder feature.
+\end{itemize}
+
+\paragraph{Conclusion (initial, later revised in \S\ref{sec:revision}).} At the
+\emph{clip} level, no encoder-stage tail index correlates with the decoder's
+($\rho\approx0$), which we first read as ``the lever lives irreducibly in-LLM.'' The
+follow-up experiments below show that this clip-level reading was at the wrong
+granularity and partly overstated.
+
+%......................................................................
+\subsection{Revision: token-level prediction and query-(in)dependence}\label{sec:revision}
+%......................................................................
+Two follow-ups tested the two weakest points of the conclusion above: (i) whether the
+clip-level ``uncorrelated'' result survives a \emph{token-level} test, and (ii)
+whether the decoder's concentration is genuinely \emph{query-dependent}.
+
+\paragraph{(i) Token-level prediction.} Instead of correlating one tail index per
+clip, we correlate, \emph{per visual token} within each clip ($M\sim10^3$, far higher
+power), the encoder$\times$query score against the decoder's importance at $L^{\!*}$.
+Pooled per-clip Spearman is $\mathbf{+0.363}$ (positive on \textbf{26/26} clips, up to
+$+0.60$). So a cheap input-space visual$\cdot$query score \emph{does} moderately
+predict which tokens the decoder keeps---the pre-LLM proxy is \emph{not} dead, just
+coarse ($\sim13\%$ of rank variance). A residual-norm control ($\lVert v\rVert\to$
+decoder) is $\approx0$ (pooled $-0.007$), so this is not a magnitude confound.
+\emph{This revises the ``irreducibly in-LLM / uncorrelated'' conclusion above: the
+clip-level correlation was simply the wrong granularity.}
+
+\paragraph{(ii) Query-(in)dependence.} Running the decoder selection under three
+deliberately divergent prompts (action / objects / background) on the same clip, the
+top-$K$ kept set has Jaccard $\mathbf{0.795}$ (random baseline $0.053$) and the full
+score vectors correlate at Spearman $\mathbf{+0.959}$ across queries. \emph{The
+decoder's kept-set barely moves with the question.} So the concentration is largely
+\textbf{query-invariant visual saliency}---``query-conditioned computation,
+query-invariant result''---not question-adaptive selection.
+
+\emph{Hardened with real MVBench questions.} Repeating this on \textbf{54 clips} with
+three \emph{real} MVBench questions per clip---each clip's own question plus two drawn
+from \emph{other tasks} (a maximally divergent, deliberately \emph{irrelevant} set)---the
+top-$K$ Jaccard is $\mathbf{0.658}$ (random $0.053$, so $\sim$12$\times$) at Spearman
+$\mathbf{+0.900}$. An irrelevant question selects almost the same tokens as the relevant
+one, so the finding holds under the sharper probe. Real, task-divergent questions do move
+the set slightly \emph{more} than generic prompts ($0.658<0.795$)---a \emph{modest}
+query-adaptive residual, concentrated on CLEVRER-style synthetic scenes (Moving
+Attribute/Direction/Count, Object Existence: Jaccard $\sim0.42$--$0.48$) where several
+similar objects force the question to disambiguate, versus near-total invariance on
+real-world action clips ($\sim0.92$--$0.95$). Even the most query-sensitive clip stays
+$\sim$8$\times$ above random. The dominant structure is a fixed saliency prior.
+
+\paragraph{Revised conclusion.} The decoder carries a \emph{stable, heavy-tailed,
+largely query-invariant} importance that a cheap encoder$\times$query score partially
+predicts. This is favourable for a \emph{training-free pre-LLM pruner} (prune once,
+cheaply, stably across queries), but it deflates the ``smart query-aware selection''
+motivation: since the decoder itself barely adapts to the query, a question-aware
+selector is unlikely to beat a fixed-saliency one by much. Caveat: the encoder proxy
+correlation, while consistent, is moderate. (The earlier concern that the
+query-(in)dependence test used only 8 clips and 3 generic prompts is now addressed above:
+the 54-clip real-MVBench-question replication confirms it, with only a modest adaptive
+residual.)
+
+\paragraph{EgoSchema replication (long-form).} Repeating the four-stage cross-probe on
+\textbf{26 EgoSchema clips} (8 frames, \texttt{max\_pixels}=200704, band $2$--$8$)
+reproduces the MVBench picture almost point-for-point, so the ``concentration lives in the
+decoder'' finding is not an 8-frame artifact.
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+stage & mean $\gm$ & fraction $\gm>0$ & Spearman vs.\ decoder \\
+\midrule
+(1) pre-proj.\ ViT attn.\ @$E^{\!*}$ \; [query-free]   & $+0.403$ & 26/26 & $+0.058$ \\
+(2) post-proj.\ geometry \; [query-free]               & $-0.298$ & 0/26  & $-0.115$ \\
+(3) post-proj.\ $\times$query \; [query-guided]        & $-0.262$ & 6/26  & $-0.050$ \\
+(4) in-LLM decoder @$L^{\!*}$ \; [query-guided]        & $+0.832$ & 26/26 & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The token-level encoder$\times$query$\to$decoder Spearman is $\mathbf{+0.382}$ (positive
+$>0.1$ on \textbf{26/26} clips), matching MVBench's $+0.363$: the cheap coarse pre-LLM
+proxy survives long-form. The residual-norm control $\lVert v\rVert\to$decoder is $-0.114$
+(0/26)---\emph{more} negative than MVBench's $-0.007$, so the norm confound is ruled out
+even more firmly. $L^{\!*}$ is again mostly layer~3, and no encoder stage predicts the
+decoder at the clip level ($\rho\approx0$). (Caveat: at 8 frames the encoder side is only
+$T{=}4$ merged temporal positions, so stage (2)'s redundancy is very sparsely sampled; but
+(2) is the flat stage and the decoder-concentration headline does not depend on it.)
+
+\paragraph{EgoSchema, real question (paired A/B).} The table above uses the same generic
+prompt as MVBench. Re-running the \emph{identical} 26 clips with each clip's \emph{own}
+official question (a per-clip query direction and decoder query; \texttt{-{}-real\_query})
+isolates the effect of the actual question. Stages (1)/(2) are unchanged (query-free, same
+$\gm$)---a mechanism check. The decoder concentration is \emph{milder but still universal}
+(pooled $\gm^{*}=+0.694$, 26/26, vs $+0.832$ for the generic prompt; $L^{\!*}$ drifts a
+little deeper, layers 4--5): a vague ``describe'' prompt lets attention pool onto generic
+saliency sinks and slightly over-states concentration. Most notably, the \emph{cheap
+pre-LLM proxy strengthens with the real question}---the token-level
+encoder$\times$query$\to$decoder Spearman rises to $\mathbf{+0.430}$ (from $+0.382$), and
+the \emph{clip-level} stage-(3) tail now tracks the decoder at Spearman $\mathbf{+0.539}$
+(from $\approx0$), with the residual-norm control still negative ($-0.137$). \emph{This
+qualifies the ``stage-3 query score fails at the clip level'' reading above: that
+$\rho\approx0$ was partly a generic-prompt artifact---a real, specific question makes the
+input-space visual$\cdot$query score track the decoder even at clip granularity.} It
+strengthens the \emph{correlational} pre-LLM-proxy story only; Exp.~4 still shows the proxy
+does not beat a random keep as a \emph{selector}.
+
+%======================================================================
+\section{Experiment 3: How much temporal content do answers need? (accuracy)}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Experiments 1--2 are about \emph{representations}. This one is about \emph{accuracy}:
+if we keep only a single frame instead of all frames, how much does MVBench accuracy
+drop? This tells us how much temporal information the task genuinely requires,
+independent of any tail-index argument.
+
+\paragraph{Setup.} Using the official MVBench protocol (midpoint frame sampling,
+option-letter logit read-out), for each question we compare, on the same $N$ frames:
+\emph{all} $N$ frames; each \emph{single} frame alone (passed as a 2-frame
+zero-motion clip, since Qwen requires an even frame count); and a \emph{blind}
+baseline with no video (the language prior). We report per task and overall:
+\texttt{all}, \texttt{single\_mean} (average over the $N$ single-frame runs),
+\texttt{single\_best} (correct if \emph{any} single frame is correct---``any one
+frame suffices''), \texttt{single\_worst} (correct only if every frame is), and
+\texttt{blind}.
+
+\paragraph{How to read it.}
+\begin{itemize}
+\item \texttt{single\_best}$\,\approx\,$\texttt{all} (or above): the answer lives in
+      \emph{some} single frame; multi-frame integration adds little beyond frame
+      \emph{selection}---temporal is largely redundant \emph{for accuracy}.
+\item \texttt{single\_best}$\,\ll\,$\texttt{all}: genuine multi-frame temporal
+      reasoning is required.
+\item \texttt{single\_mean}$\,\approx\,$\texttt{blind}: a lone random frame barely
+      beats the language prior (a caution that some tasks are text-solvable).
+\end{itemize}
+
+\paragraph{Results (19 tasks $\times$ 50 questions $=$ 950, $N{=}8$).}
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+overall & \texttt{all} & \texttt{single\_mean} & \texttt{single\_best} & \texttt{single\_worst} & \texttt{blind} \\
+\midrule
+accuracy & 62.2\% & 53.9\% & 74.9\% & 31.8\% & 43.8\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{Multi-frame helps, but only modestly.} All eight frames beat a
+      \emph{typical} single frame by $\texttt{all}-\texttt{single\_mean}=+8.3$ points.
+      Temporal integration is real, not zero.
+\item \textbf{Frame \emph{selection} is the bigger lever.} The \emph{best} single
+      frame beats all-frames by $\texttt{single\_best}-\texttt{all}=+12.7$ points: a
+      well-chosen single frame outperforms dumping in all eight. The model
+      \emph{under-exploits} having all frames; \emph{which} frame beats \emph{how
+      many}. (\texttt{single\_best} is a max over 8 draws, i.e.\ an \emph{oracle}
+      upper bound.)
+\item \textbf{About a quarter of questions genuinely need multiple frames.} If the 8
+      frames were independent at $p=\texttt{single\_mean}=0.539$, an oracle would reach
+      $1-(1-0.539)^8\approx99.8\%$. The observed $74.9\%$ is far lower, so frames are
+      \emph{strongly correlated per question} (the answer is robustly present or
+      robustly absent). The $\sim25\%$ that \emph{no} single frame solves are the
+      genuinely multi-frame (or simply hard) cases.
+\item \textbf{Vision matters, unevenly.} $\texttt{all}-\texttt{blind}=+18.4$ points
+      overall. But \emph{Object Existence} is a clean multi-frame task (all $96\%$ vs
+      best-single $86\%$: scanning whether an object \emph{ever} appears), whereas
+      \emph{Action Localization} is adversarial to the model (all $30\%$ \emph{below}
+      blind $50\%$---the video hurts).
+\end{itemize}
+
+\paragraph{Notable per-task patterns ($n=50$ each).} Large selection headroom
+(\texttt{single\_best}$\gg$\texttt{all}): Object Interaction ($68\!\to\!90$), Scene
+Transition ($82\!\to\!96$), Object Shuffle ($38\!\to\!66$), Moving Attribute
+($84\!\to\!94$). Genuine multi-frame benefit (\texttt{all}$\ge$\texttt{single\_best}):
+Object Existence. Vision adds little / hurts (\texttt{all}$\approx$\texttt{blind} or
+below): Action Localization, Action Count, Egocentric Navigation.
+
+\paragraph{Caveats.} Single frames are passed as a 2-frame zero-motion clip
+(\texttt{[f,f]}), a proxy for one frame of content that we did not separately
+validate against true single-image input. The blind baseline ($43.8\%$) shows a
+material language prior. Overall the study is consistent: \emph{temporal content is
+only weakly needed for accuracy, and the value lies in selection, not accumulation.}
+
+\paragraph{EgoSchema replication (long-form); frame selection is \emph{not} a short-clip
+artifact.} We repeated the probe on the \textbf{500-question EgoSchema Subset}
+($\sim$3-minute egocentric clips, 5 options, aggregate reasoning) at $N{=}16$ frames,
+\texttt{max\_pixels}=200704. The prior expectation was that long-form would \emph{flip}
+the result---aggregate reasoning should need accumulation, so
+\texttt{single\_best}$\,\lesssim\,$\texttt{all}. It does the opposite.
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+overall & \texttt{all} & \texttt{single\_mean} & \texttt{single\_best} & \texttt{single\_worst} & \texttt{blind} \\
+\midrule
+$N{=}16$ & 58.0\% & 51.4\% & 77.4\% & 22.8\% & 30.8\% \\
+$N{=}8$  & 52.2\% & 51.1\% & 73.2\% & 27.6\% & 30.8\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A chosen single frame beats all 16 frames by $\texttt{single\_best}-\texttt{all}=+19.4$
+pts (MVBench $+12.7$): on a benchmark built for long-form reasoning, the model
+\emph{under-exploits} the full clip even harder. Two \emph{draw-robust} reads confirm this
+independent of the oracle: (i) $\texttt{all}-\texttt{single\_mean}=+6.6$---sixteen frames
+barely beat \emph{one typical frame} (accumulation is real but small, even smaller than
+MVBench's $+8.3$); (ii) $\texttt{all}-\texttt{blind}=+27.2$ with \texttt{blind}$=30.8\%$
+(chance $20\%$)---vision matters far more than on MVBench (\texttt{blind} $43.8\%$ vs
+chance $25\%$), so EgoSchema is a cleaner vision test and the
+selection$\,\gg\,$accumulation finding is strengthened, not weakened.
+
+\emph{Caveat (do not compare \texttt{single\_best} across $N$).} \texttt{single\_best} is
+an oracle max over $N$ single-frame draws, so the $N{=}16$ EgoSchema run is mechanically
+inflated relative to MVBench's $N{=}8$ (the chance-independence null oracle is already
+$\sim$97\% at $N{=}16$/5-options vs $\sim$90\% at $N{=}8$/4-options). The observed
+$77.4\%$ sits far below even that chance floor, so frames are strongly correlated per
+question and the draws are not independent. The apples-to-apples $N{=}8$ control (table,
+second row) settles it: at matched $N{=}8$, $\texttt{single\_best}-\texttt{all}=+21.0$
+(MVBench $+12.7$), so the selection lever is genuinely \emph{larger} on long-form, not a
+draw artifact---and $\texttt{all}-\texttt{single\_mean}$ is only $+1.1$ at $N{=}8$ (eight
+frames barely beat one typical frame).
+
+\paragraph{Which frame? Not a positional one.} A natural cheap selector is temporal
+position---is the answerable frame usually early / late / middle? Scoring each of the $N$
+midpoint-sampled frames \emph{in isolation} ($[f,f]$, so the score is content-at-that-time,
+not an in-context position bias), per-position single-frame accuracy is \emph{flat}: at
+$N{=}16$ it spans only $49.8$--$54.8\%$ (at $N{=}8$, $48.8$--$55.0\%$), a $\sim$5-pt spread
+that is only $\sim2\times$ the per-position SE ($\approx2.2$ at $n{=}500$), with no
+consistent early/late trend across the two frame counts. Picking the \emph{middle} frame
+scores $51.2\%$ = the random-frame floor ($51.3\%$; Exp.~5). So \emph{which} frame is
+answerable is idiosyncratic per question, not positionally predictable---extending Exp.~5's
+negative (no cheap \emph{content} score picks the frame) to raw temporal position.
+
+%======================================================================
+\section{Experiment 4: Is the decoder's concentration exploitable? (the closer)}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Experiments 1--2 located \emph{where} importance is concentrated (a heavy tail in the
+decoder). Concentration is \emph{necessary} for ranking to help, but not \emph{sufficient}:
+a token can receive high attention yet not be causally required for the answer. This is the
+direct test. At a fixed visual-token budget $\rho$ we keep only the top
+$K=\lceil\rho M\rceil$ tokens chosen by each scorer, drop the rest \emph{at the input}
+(preserving every kept token's original mRoPE position), and read the MVBench answer. The
+prune mechanism is identical across scorers---only the \emph{score} differs---so any
+accuracy gap is the scorer's, not the mechanism's. Answer: the decoder scorer does
+\emph{not} beat random. The concentration is real but not causally exploitable for token
+selection.
+
+\paragraph{Setup.} Four scorers at $\rho\in\{0.10,0.25\}$: \texttt{decoder} (the debiased
+decoder importance at $L^{\!*}$, the real in-LLM target, applied here as an input prune---a
+slightly conservative test for it); \texttt{encquery} (the cheap input-space
+visual$\cdot$query projection, the pre-LLM proxy of \S\ref{sec:revision}); \texttt{random}
+($K$ random tokens, the floor); and \texttt{uniform} ($K$ evenly-spaced tokens, a
+content-free \emph{structured} floor). \texttt{full} is the unpruned reference. 19 tasks
+$\times$ 30 questions $=570$, $N{=}8$ frames, \texttt{max\_pixels}=200704, official MVBench
+read-out.
+
+\paragraph{Results (570 questions, four budgets).}
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+$\rho$ & \texttt{decoder} & \texttt{encquery} & \texttt{random} & \texttt{uniform} & \texttt{full} \\
+\midrule
+0.01 & 46.0\% & 50.0\% & 49.3\% & 46.3\% & 62.5\% \\
+0.05 & 50.9\% & 54.2\% & 54.0\% & 55.3\% & 62.5\% \\
+0.10 & 54.4\% & 54.9\% & 57.7\% & 56.1\% & 62.5\% \\
+0.25 & 58.9\% & 56.3\% & 57.9\% & 59.8\% & 62.5\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{Decoder is at or below random at every budget, and worst where it should be
+      best.} \texttt{decoder}$-$\texttt{random} is $-3.3$ / $-3.2$ / $-3.3$ / $+1.1$ pts at
+      $\rho=0.01$ / $0.05$ / $0.10$ / $0.25$. An \emph{exploitable} importance scorer should
+      help \emph{more} as the budget tightens (fewer slots $\Rightarrow$ picking the right
+      tokens matters most); the decoder scorer does the \emph{opposite}---it is $\sim$3 pts
+      \emph{below} random at the aggressive $1$--$10\%$ budgets and only reaches parity at
+      $25\%$. That monotone pattern is the signature of a \emph{non-causal} signal, and it
+      closes the ``maybe it works at tight budgets'' escape hatch. (Per-proportion SE at
+      $N{=}570$ is $\approx2.1$ pts, so any single gap is $\sim$1.5\,SE; the \emph{consistency}
+      across four budgets is the result.)
+\item \textbf{The content-free floors are on top.} At every budget the best pruned setting
+      is \texttt{random} or \texttt{uniform}, never \texttt{decoder}. \emph{Which} tokens you
+      keep barely matters; keeping a \emph{spread} is as good as or better than any importance
+      score---exactly the ``uniform graded field'' of Exp.~1, now measured in accuracy.
+\item \textbf{The cheap proxy fails the same way.} \texttt{encquery}$-$\texttt{random} is
+      $+0.7$ / $+0.2$ / $-2.8$ / $-1.6$ pts: statistically level with random at the tight
+      budgets and below it at the loose ones. The pre-LLM proxy, coarse-but-real as a
+      \emph{correlation} (\S\ref{sec:revision}), buys nothing as a \emph{selector}.
+\item \textbf{Budget costs a fixed amount regardless of scorer.} Within each budget the four
+      scorers sit within $\sim$3 pts of one another and all well below \texttt{full}
+      (the gap widens as $\rho$ shrinks: $\sim$4 pts at $0.25$ to $\sim$16 pts at $0.01$).
+      The information is spread across tokens, not held by a removable-and-sufficient elite.
+\end{itemize}
+
+\paragraph{Caveat (and why it does not rescue the claim).} The \texttt{decoder} score is
+computed on the full-context forward and then applied as an \emph{input} prune, so the kept
+tokens' $L^{\!*}$ representations no longer exactly match a true in-LLM (FastV-style) prune
+that drops tokens \emph{after} $L^{\!*}$---a slightly pessimistic test for the decoder
+scorer. But the input prune is the only variant that saves \emph{encoder/prefill} compute
+(the entire point of a ``pre-LLM pruner''), and \texttt{encquery}---a genuine pure-input
+scorer with no such confound---also loses to random. Both deployable variants fail.
+
+\paragraph{Conclusion.} Attention concentration ($\gm>0$ in the decoder) is
+\emph{necessary but not sufficient}: it does not identify the causally required tokens.
+Ranking-and-keeping visual tokens by importance---the thread these experiments set out to
+test---does not beat a uniform/random keep at matched budget. The token-selection lever is
+exhausted; the remaining levers are at the \emph{frame} level (Exp.~3) and in
+\emph{uniform/recoverable} compression (Exp.~1).
+
+\paragraph{EgoSchema replication ($N{=}500$): the closer holds at long context.} At full
+power (all 500 EgoSchema questions, $N{=}16$) the decoder scorer again fails where causal
+selection should help most. Decoder$-$random is $-6.0$ / $-1.0$ / $+3.4$ / $+1.6$ at
+$\rho=0.01/0.05/0.10/0.25$: \emph{most negative at the tightest budget}, the same non-causal
+monotone signature as MVBench (there $-3.3/-3.2/-3.3/+1.1$).
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+$\rho$ & \texttt{decoder} & \texttt{encquery} & \texttt{random} & \texttt{uniform} & \texttt{full} \\
+\midrule
+0.01 & 32.4\% & 37.6\% & 38.4\% & 35.6\% & 60.2\% \\
+0.05 & 45.4\% & 46.6\% & 46.4\% & 47.2\% & 60.2\% \\
+0.10 & 53.4\% & 49.2\% & 50.0\% & 50.4\% & 60.2\% \\
+0.25 & 57.0\% & 52.4\% & 55.4\% & 54.8\% & 60.2\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At the aggressive $1$--$5\%$ budgets---where a real importance signal must shine---decoder is
+clearly $\le$ random (and \texttt{random} is the \emph{top} scorer at $\rho{=}0.01$,
+$38.4\%$). The only residual difference from MVBench is at \emph{loose} budgets, where
+decoder edges the floors ($\rho{=}0.10$: $53.4$ vs random $50.0$; $\rho{=}0.25$: $57.0$ vs
+$55.4$)---a mild real effect, but exactly where pruning saves least (\texttt{full}
+$60.2\%$). Net: importance-ranked token selection stays closed for \emph{aggressive} pruning
+long-form too; any benefit is confined to loose budgets. (An $N{=}200$ pilot had hinted at
+exploitability---decoder above random at three of four budgets---but that did not survive the
+full-power run; it was underpowered noise.)
+
+%======================================================================
+\section{Experiment 5: What makes the answer frame different? (Only LLM confidence, weakly)}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Exp.~3 established that a chosen frame is a real lever (the oracle single-best beats
+all-frames by $+12.7$ pts). Exp.~4 established that ranking \emph{tokens} by concentration
+does not beat random. So which frame is the answerable one, and how does it \emph{differ}
+from the rest? We score each frame by seven signals---from cheap pre-LLM statistics to the
+LLM's own answer-confidence---and ask which, if any, marks the frame the model can answer
+from. Result: none of the visual/attention signals do (decoder concentration is even
+\emph{anti}-correlated); only the LLM's confidence does, and only weakly.
+
+\paragraph{Setup.} Each frame is scored on its OWN encoder tokens (passed as the $[f,f]$
+zero-motion clip, so its score uses only its content, matching how single-frame accuracy
+is read out). \emph{Cheap pre-LLM} scorers: \texttt{xi\_encq} (tail index of the frame's
+encoder$\times$query token scores), \texttt{xi\_sal} (tail index of $\lVert v\rVert$,
+query-free), \texttt{mass\_encq} (mean encoder$\times$query), \texttt{motion} (novelty vs.\
+the neighbour frame). \emph{Strong in-LLM references} (one $[f,f]$ forward per frame, eager):
+\texttt{dec\_xi} (tail index of the frame's own debiased decoder importance at $L^{\!*}$),
+\texttt{dec\_mass} (its total decoder attention mass), and \texttt{conf} (the model's
+single-frame answer-confidence margin, top minus second option logit). Each is judged by
+the accuracy of the frame it \emph{picks} (argmax) against \texttt{single\_mean}
+(random-frame floor) and \texttt{single\_best} (oracle), plus a per-frame \emph{discrimination}
+AUC $=P(\text{score of a correct frame}>\text{score of an incorrect one})$, pooled and
+\emph{within-clip} (restricted to the 243 ``mixed'' clips with both a correct and an
+incorrect frame, so per-clip difficulty is controlled). 570 questions, $N{=}8$.
+
+\paragraph{Results (570 questions; \texttt{single\_mean}$=54.6$ floor, \texttt{single\_best}$=75.4$
+oracle, \texttt{all}$=62.3$).}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+scorer & accuracy & vs.\ \texttt{single\_mean} & headroom captured \\
+\midrule
+\texttt{xi\_encq}    & 53.0\% & $-1.6$ & $-8\%$ \\
+\texttt{xi\_sal}     & 56.5\% & $+1.9$ & $+9\%$ \\
+\texttt{mass\_encq}  & 57.0\% & $+2.5$ & $+12\%$ \\
+\texttt{motion}      & 53.7\% & $-0.9$ & $-4\%$ \\
+\texttt{dec\_xi}     & 52.8\% & $-1.8$ & $-8\%$ \\
+\texttt{dec\_mass}   & 53.2\% & $-1.4$ & $-7\%$ \\
+\textbf{\texttt{conf}} & \textbf{58.1\%} & $\mathbf{+3.5}$ & $\mathbf{+17\%}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+scorer & pooled AUC & within-clip AUC & top-1-on-mixed \\
+\midrule
+\texttt{xi\_encq}    & 0.507 & 0.493 & 47.9\% \\
+\texttt{xi\_sal}     & 0.507 & 0.507 & 55.6\% \\
+\texttt{mass\_encq}  & 0.508 & 0.538 & 56.8\% \\
+\texttt{motion}      & 0.512 & 0.481 & 49.0\% \\
+\texttt{dec\_xi}     & 0.435 & 0.468 & 46.9\% \\
+\texttt{dec\_mass}   & 0.507 & 0.495 & 47.7\% \\
+\textbf{\texttt{conf}} & \textbf{0.650} & \textbf{0.570} & \textbf{59.3\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{No visual or attention signal marks the answer frame.} The four cheap scorers
+      and \emph{both} decoder-concentration scorers sit within $2.5$ pts of the random floor,
+      with within-clip AUCs $0.47$--$0.54$. Selecting by concentration---even the decoder's
+      own in-clip concentration (\texttt{dec\_xi})---does not pick the frame.
+\item \textbf{Decoder concentration is actively the wrong signal.} \texttt{dec\_xi} has
+      pooled AUC \textbf{0.435} ($\Delta$mean $-0.038$) and within-clip $0.468$: a
+      \emph{more} concentrated frame is \emph{less} likely to be answerable. This is the
+      sharpest form of ``concentration is not causal''---at frame granularity, with the
+      decoder's own signal, the arrow points backwards.
+\item \textbf{Only the LLM's confidence works, and only weakly.} \texttt{conf} is the sole
+      scorer that clears random ($+3.5$ pts, $+17\%$ of the oracle headroom) and the sole one
+      with a real discrimination signal (within-clip AUC \textbf{0.570}, pooled $0.650$,
+      $\Delta$mean $+0.97$). \emph{The answer frame is distinguished by the model's ability to
+      answer from it---a functional property---not by how it looks.} But it is modest (a sixth
+      of the headroom) and needs a per-frame LLM forward, so it saves no compute.
+\item \textbf{Confidence helps where a discrete ``answer moment'' exists.} Per task,
+      \texttt{conf} beats the random frame most on Scene Transition ($+14$: $90.0$ vs $75.8$),
+      Counterfactual ($+15$), Character Order ($+10$), Action Antonym ($+9$); it \emph{loses}
+      on temporal/counting tasks (Action Localization $-7$, Moving Direction $-1$) where no
+      single frame is confidently answerable.
+\end{itemize}
+
+\paragraph{Conclusion.} The answer frame is \emph{not} visually distinguished---not more
+salient, concentrated, moving, or query-similar; decoder concentration is even
+anti-correlated. The one property that marks it is the LLM's own answer-confidence
+(within-clip AUC $0.57$), a functional/semantic signal rather than a visual one---but it is
+weak and requires a per-frame forward, so no cheap deployable frame selector exists on any
+of these signals. The open question this leaves is whether a \emph{cheap proxy} for
+confidence---e.g.\ an external contrastive (CLIP/SigLIP) image$\times$question match, the one
+signal a non-contrastive Qwen space cannot provide---recovers it on the object/scene tasks
+where confidence works. Experiment~7 tests exactly this.
+
+\paragraph{EgoSchema replication ($N{=}500$): same picture, and \texttt{conf} is
+\emph{stronger}.} Anchors: \texttt{single\_mean} $51.3$ (floor), \texttt{single\_best}
+$76.8$ (oracle), \texttt{all} $59.0$; $N{=}16$, mixed clips $n{=}273$.
+
+\begin{center}
+\begin{tabular}{lccc@{\hskip 2em}ccc}
+\toprule
+scorer & acc.\ & vs.\ mean & headroom & pooled AUC & within AUC & top-1 \\
+\midrule
+\texttt{xi\_encq}   & 51.2\% & $-0.1$ & $-0\%$  & 0.488 & 0.479 & 52.9\% \\
+\texttt{xi\_sal}    & 51.2\% & $-0.1$ & $-0\%$  & 0.497 & 0.482 & 53.1\% \\
+\texttt{mass\_encq} & 48.6\% & $-2.7$ & $-10\%$ & 0.491 & 0.506 & 48.4\% \\
+\texttt{motion}     & 46.0\% & $-5.3$ & $-21\%$ & 0.472 & 0.437 & 43.6\% \\
+\texttt{dec\_xi}    & 50.6\% & $-0.7$ & $-3\%$  & 0.489 & 0.488 & 52.0\% \\
+\texttt{dec\_mass}  & 51.6\% & $+0.3$ & $+1\%$  & 0.499 & 0.512 & 53.8\% \\
+\texttt{middle}     & 51.2\% & $-0.1$ & $-0\%$  & --- & --- & --- \\
+\textbf{\texttt{conf}} & \textbf{57.4\%} & $\mathbf{+6.1}$ & $\mathbf{+24\%}$ & \textbf{0.682} & \textbf{0.636} & \textbf{64.5\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every cheap visual/attention scorer again sits at the floor (within-clip AUC $0.44$--$0.51$),
+as does picking the \texttt{middle} frame ($51.2$ = floor; cf.\ Exp.~3's flat per-position
+accuracy). Only \texttt{conf} works, and \emph{more strongly than on MVBench}: $+6.1$ pts
+over the floor ($+24\%$ of the oracle headroom vs $+17\%$), pooled AUC $0.682$ / within-clip
+$0.636$ (vs $0.650/0.570$). The answer frame is functionally---not visually---distinguished,
+and long-form sharpens that. One nuance: the decoder-concentration scorer \texttt{dec\_xi},
+which was \emph{anti}-correlated on MVBench (AUC $0.435$), is merely \emph{neutral} here
+(pooled $0.489$, within $0.488$)---uninformative rather than backwards, so that sharp
+anti-correlation was dataset-specific; the core claim (decoder concentration does not pick
+the frame) holds either way.
+
+%======================================================================
+\section{Experiment 6: Does a temporal change-point in attention mark the answer? (No)}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Every scorer in Exp.~5 was a per-frame \emph{level} statistic, and none marked the answer
+frame. One axis was left untested: the \emph{temporal derivative}. The intuition is that an
+event the question refers to (``what does he do \emph{after} he stands up'') shifts the
+aggregated query-guided attention---off the bench, onto the new action---so the answerable
+position should sit at that \emph{change-point}, even where no single frame is statically
+special. We test it on long-form EgoSchema, where a change-point has the most temporal room to
+show. It fails: the derivative does not mark the answer, and it does not even beat the plain
+attention \emph{level} it is computed from---so this closes the temporal-derivative axis, not
+just the level one.
+
+\paragraph{Setup.} (Script: \texttt{frame\_attn\_changepoint\_mvbench.py}.) One full-clip
+forward (eager) yields the debiased query-guided importance at
+$L^{\!*}$ (the same quantity as Exp.~2's stage 4 / Exp.~4's \texttt{decoder} scorer); we
+aggregate it over each native temporal position into a trajectory $a[t]$, $t=0\ldots T{-}1$.
+Qwen temporally pairs frames, so the finest unit is the \emph{position} (a pair), $T{=}N/2$;
+there is no per-frame attention in a full-clip pass. Scorers on the trajectory:
+\texttt{cp\_post} ($\lvert a[t]-a[t{-}1]\rvert$ credited to the \emph{later} ``after''
+position), \texttt{cp\_pre} (to the earlier position), \texttt{attn\_level} ($a[t]$
+itself---the level baseline, so change vs.\ level is read off one trajectory), and
+\texttt{conf} (the isolated per-position answer margin---Exp.~5's winner, the reference to
+beat). Each position's answerability and the anchors come from an isolated forward on its real
+frame-pair. This is \emph{correlational} (it reads attention magnitude---the Exp.~4 caveat); the
+causal version (ablate a position, watch the $\Delta$logit) is a follow-up only if this
+survives. EgoSchema, $N{=}16\Rightarrow T{=}8$ positions, 500 questions, mixed clips $n{=}181$.
+
+\paragraph{Results (EgoSchema; \texttt{single\_mean}$=46.8$ position floor,
+\texttt{single\_best}$=65.4$ oracle, \texttt{all}$=59.0$; anchors are position-granular, so the
+oracle is below Exp.~7's frame-level $77.4$).}
+
+\begin{center}
+\begin{tabular}{lccc@{\hskip 2em}ccc}
+\toprule
+scorer & acc.\ & vs.\ mean & headroom & pooled AUC & within AUC & top-1 \\
+\midrule
+\texttt{cp\_post}   & 46.6\% & $-0.2$ & $-1\%$  & 0.486 & 0.480 & 46.5\% \\
+\texttt{cp\_pre}    & 49.4\% & $+2.6$ & $+14\%$ & 0.495 & 0.521 & 57.1\% \\
+\texttt{attn\_level}& 46.4\% & $-0.4$ & $-2\%$  & 0.500 & \textbf{0.540} & 47.5\% \\
+\textbf{\texttt{conf}} & \textbf{49.0\%} & $\mathbf{+2.2}$ & $\mathbf{+12\%}$ & \textbf{0.656} & \textbf{0.578} & \textbf{54.7\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{The change-point does not mark the answer.} \texttt{cp\_post} within-clip AUC is
+      \textbf{0.480}---\emph{below} chance, i.e.\ the position just after a shift is if anything
+      \emph{less} answerable---and \texttt{cp\_pre} is $0.521$, a whisker above. Neither clears
+      the floor by more than $\sim$1 SE (SE$\approx0.037$ at $n{=}181$).
+\item \textbf{Level $\ge$ change---the decisive result.} \texttt{attn\_level} ($0.540$, the
+      plain in-context attention mass) \emph{beats both} change-points. So the derivative was
+      not merely the wrong statistic: it carries no more than the level, and the level itself is
+      weak. The untested axis is closed, consistent with Exp.~2b's finding that most of the
+      trajectory's motion is a fixed, query-\emph{invariant} saliency prior rather than a
+      question-driven signal.
+\item \textbf{Confidence, again, is the only real signal.} \texttt{conf} has within-clip AUC
+      $0.578$ (pooled $0.656$, $\Delta$mean $+0.75$)---above every attention-derived score,
+      level or change. The arc replicates: answerability is functional, not something a static
+      or temporal attention statistic exposes.
+\item \textbf{One mild positive.} \texttt{attn\_level} ($0.540$, query-guided mass measured
+      \emph{in context}) edges Exp.~5's \emph{isolated} \texttt{dec\_mass} ($0.512$)---being in
+      the full-clip context helps a hair---but not meaningfully, and still below \texttt{conf}.
+\end{itemize}
+
+\paragraph{Conclusion.} A temporal change-point in the query-guided attention does not localize
+the answerable position, and carries no more signal than the attention level it is derived
+from---both weak, both below the LLM's own confidence. This closes the last static/attention
+axis for cheap frame selection: neither the \emph{level} of attention (Exp.~5) nor its
+\emph{temporal change} (here) marks the answer; only the model's functional confidence does.
+The MVBench per-task split ($950$ questions, $N{=}16$) confirms it on the second dataset:
+within-clip AUC \texttt{cp\_post} $0.489$ / \texttt{cp\_pre} $0.481$ / \texttt{attn\_level}
+$0.481$---all \emph{below} chance---versus \texttt{conf} $0.570$. The narrower bet fails too: on
+the temporal tasks where confidence itself loses, the change-point does not pick up the slack
+(Moving Direction: every scorer below chance, \texttt{cp\_post} $0.37$, \texttt{conf} $0.21$;
+Action Localization: \texttt{conf} $0.61$ wins, change-points at chance). A handful of isolated
+cells clear $0.6$ (e.g.\ \texttt{cp\_pre} $0.65$ on Object Shuffle) but are inconsistent across
+the three change/level variants and within noise given $\sim$57 task$\times$scorer cells---no
+coherent complementary pocket. The temporal-derivative axis is closed on both datasets.
+
+%======================================================================
+\section{Experiment 7: A contrastive (aligned-space) frame selector}
+%======================================================================
+
+\paragraph{Plain-language summary.}
+Exp.~5 ended on one open question: the answer frame is marked only by a \emph{functional}
+signal (the LLM's confidence) and by none of Qwen's own visual/attention statistics---is that
+because Qwen's projector space is not \emph{contrastively} text-aligned? We test the one signal
+that space cannot give: an external contrastive (SigLIP) match between each frame and the
+question. It clears chance where Qwen's own features could not---but only on tasks where a
+single frame is decisive, and even when handed the correct answer it merely \emph{ties}
+confidence. So the limitation is partly the space, but mostly that answerability is functional,
+not retrieval-shaped; the payoff is a narrow, task-gated selector, not a general one.
+
+\paragraph{Setup.} (Script: \texttt{frame\_clip\_select.py}.) SigLIP
+(\texttt{google/siglip-base-patch16-224}) scores each \emph{raw} PIL
+frame (never through Qwen's temporal merge---so this is also the clean control for the ``is it
+the $[f,f]$ merge?'' worry) by cosine similarity to a text query. Three scorers of increasing
+knowledge: \texttt{q\_match} (frame vs.\ the question alone---``is this frame on topic'');
+\texttt{qopt\_margin} (deployable: cosine to ``question $+$ option$_j$'' for every option,
+scored by the top-1 minus top-2 \emph{decisiveness} across options); and \texttt{qgt\_oracle}
+(a ceiling that \emph{uses the label}: cosine to ``question $+$ the correct option''---is the
+answerable frame even \emph{visible} in the aligned space?). Per-frame answerable labels and the
+\texttt{single\_*}/\texttt{all} anchors come from Qwen's single-frame $[f,f]$ protocol
+(Exp.~3/5), so the CLIP scores are judged against the same ground truth. MVBench, 19 tasks
+$\times$ 50 $=$ 950 questions, $N{=}16$, mixed clips $n{=}483$ (\texttt{single\_mean}$=53.6$
+floor, \texttt{single\_best}$=78.4$ oracle, \texttt{all}$=61.8$).
+
+\begin{center}
+\begin{tabular}{lccc@{\hskip 2em}ccc}
+\toprule
+scorer & acc.\ & vs.\ mean & headroom & pooled AUC & within AUC & top-1 \\
+\midrule
+\texttt{q\_match}    & 54.0\% & $+0.4$ & $+2\%$  & 0.508 & 0.515 & 52.0\% \\
+\texttt{qopt\_margin}& 55.4\% & $+1.8$ & $+7\%$  & 0.568 & 0.525 & 54.7\% \\
+\texttt{qgt\_oracle} & 56.9\% & $+3.4$ & $+14\%$ & 0.547 & 0.582 & 57.8\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{An a-priori task split.} We group tasks by their \emph{semantics}---not by the
+measured AUCs, so the split is not circular---into \emph{selection-shaped} (a single decisive
+frame answers) and \emph{accumulation} (existence / counting / tracking / relative order, where
+the answer needs many frames). Within-clip AUC pooled over each bucket:
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+bucket & \#tasks & $n_{\mathrm{mix}}$ & \texttt{q\_match} & \texttt{qopt\_margin} & \texttt{qgt\_oracle} \\
+\midrule
+selection    & 12 & 347 & 0.521 & 0.531 & \textbf{0.602} \\
+accumulation &  7 & 136 & 0.502 & 0.511 & \textbf{0.529} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Reading the numbers.}
+\begin{itemize}
+\item \textbf{The aligned space clears chance---barely, and only at the ceiling.}
+      \texttt{qgt\_oracle} within-clip AUC is \textbf{0.582}, versus $0.44$--$0.53$ for every
+      Qwen-internal pre-LLM scorer in Exp.~5. So part of Exp.~5's failure \emph{was} the
+      non-contrastive space: an aligned space recovers signal Qwen's own features could not.
+\item \textbf{But even the oracle only ties confidence.} \texttt{qgt\_oracle} is handed the
+      correct answer text, yet its $0.582$ merely matches Exp.~5's \texttt{conf} ($0.570$),
+      which uses \emph{no} label. The model's functional confidence sees as much
+      frame-answerability as contrastive matching does \emph{even with the answer in hand}:
+      answerability is a functional/reasoning property, and the aligned space only
+      \emph{proxies} it.
+\item \textbf{The deployable score is at chance.} \texttt{qopt\_margin} within-clip AUC is
+      $0.525$ ($+1.8$ pts over the floor). Its higher \emph{pooled} AUC ($0.568$) than
+      \emph{within-clip} ($0.525$) is a tell: it tracks which \emph{clips} are easy, not which
+      \emph{frame} within a clip---near-useless as a frame selector.
+\item \textbf{Where it works is selection-shaped tasks.} The oracle's within-clip AUC is
+      $0.602$ on selection-shaped tasks vs $0.529$ on accumulation ones ($\Delta+0.073$).
+      \textbf{Object Existence at within-clip AUC $0.50$}---the canonical retrieval task---is
+      the tell: it is an \emph{accumulation} task (Exp.~3 flagged it as the clean multi-frame
+      one), so no single frame is discriminative and no scorer can pick one. This refutes a
+      naive ``object/scene vs.\ temporal'' reading; the axis is \emph{single decisive frame}
+      vs.\ \emph{accumulation}. The oracle's pocket: Object Interaction $0.68$, Scene
+      Transition $0.67$, Action Prediction $0.65$.
+\end{itemize}
+(Small-$n$ per-task cells---Moving Direction $n{=}3$, Egocentric Navigation $n{=}8$---are
+noise; and $N{=}16$ inflates the \texttt{single\_best} oracle, so the headroom-\% figures are
+optimistic and the within-clip AUC is the trustworthy metric.)
+
+\paragraph{Conclusion.} An externally aligned contrastive space \emph{partly} rescues the
+limitation Exp.~2 and Exp.~5 identified: it clears chance on selection-shaped tasks where
+Qwen's non-contrastive features---and even its decoder's own concentration---did not. But it is
+not a general, cheap frame selector. The label-free \texttt{qopt\_margin} is at chance pooled
+and below \texttt{conf}; and the oracle, given the answer, only ties \texttt{conf}. What remains
+is a \emph{narrow, task-gated} selector for tasks where a single frame is decisive---consistent
+with the arc's recurring finding that frame selection is a real lever but not cheaply
+exploitable. That a stronger aligned model (SigLIP2) lifts this is doubtful: the ceiling ties
+confidence \emph{with the label}, so the bottleneck is not primarily model strength.
+
+\paragraph{EgoSchema replication ($N{=}500$): same shape, and the gap to confidence
+\emph{widens}.} On the 500-question EgoSchema Subset ($N{=}16$, mixed clips $n{=}273$;
+\texttt{single\_mean}$=51.4$ floor, \texttt{single\_best}$=77.4$ oracle, \texttt{all}$=58.0$)
+the picture replicates: \texttt{q\_match} at the floor (within-clip AUC $0.509$), the deployable
+\texttt{qopt\_margin} essentially at chance ($0.536$, $+1.4$ pts over the floor), and only the
+label-using \texttt{qgt\_oracle} clearing it ($0.592$, $+3.4$ pts / $+13\%$ headroom). But the
+diagnostic comparison \emph{sharpens}: whereas on MVBench the oracle merely \emph{tied}
+confidence ($0.582$ vs \texttt{conf}'s $0.570$), long-form it falls \emph{behind}
+it---\texttt{qgt\_oracle} $0.592$ vs Exp.~5's \texttt{conf} $0.636$. Even handed the correct
+answer, contrastive matching localizes the frame \emph{less} well than the model's own
+confidence does without it, and the gap \emph{grows} on the aggregate-reasoning benchmark. This
+is the asymmetry Exp.~5 found (\texttt{conf} strengthens long-form) seen from the contrastive
+side: answerability is functional, and the more a task demands reasoning over retrieval, the
+less an aligned-space match can substitute. (No task split---EgoSchema is a single task; the
+oracle's $0.592$ sits near MVBench's \emph{selection-shaped} bucket $0.602$, consistent with
+Exp.~3's finding that a decisive frame often exists even long-form.)
+
+%======================================================================
+\section{Synthesis}
+%======================================================================
+
+Putting the pieces together:
+\begin{enumerate}
+\item \textbf{The vision encoder carries no rankable structure.} Its redundancy is
+      real, high, global, but \emph{uniform} (Exp.~1). Neither its geometry nor its
+      own attention nor an input-space query score predicts what the decoder
+      actually uses at the clip level (Exp.~2).
+\item \textbf{The rankable structure is inside the decoder}, emerges early
+      ($L^{\!*}\!\approx\!3$), is strongly concentrated on every clip, is
+      \emph{largely query-invariant} (a fixed visual-saliency prior, \S\ref{sec:revision}),
+      and is \emph{moderately predictable} from a cheap encoder$\times$query score at
+      the token level (Spearman $+0.36$).
+\item \textbf{But the concentration is not causally exploitable (Exp.~4).} Pruning
+      tokens by the decoder's own importance does \emph{no better than a random or
+      uniform keep} at matched budget, and the cheap proxy is no better. A heavy tail in
+      attention ($\gm>0$) is \emph{necessary but not sufficient}: it marks where
+      attention mass pools, not which tokens the answer causally needs. The information
+      is a redundant field (Exp.~1, now confirmed in accuracy), so \emph{spread} beats
+      \emph{importance}.
+\item \textbf{Design implication (final).} The importance-ranked \emph{selection} thread is
+      closed at both granularities.
+      \begin{itemize}
+      \item \emph{Tokens.} Ranking tokens by importance does not beat a random or uniform
+            keep (Exp.~4).
+      \item \emph{Frames.} A chosen frame is a real oracle-level lever (Exp.~3), but no cheap
+            per-frame score picks it: not the tail index, query-mass, or motion, and not even
+            the decoder's own concentration, which is \emph{anti}-correlated (Exp.~5). The
+            \emph{temporal change-point} in the query-guided attention fails too, carrying no
+            more signal than the attention level it is built from (Exp.~6). The only signal
+            that marks the answer frame is the LLM's answer-confidence---and only weakly
+            (within-clip AUC $0.57$), at the cost of a per-frame forward.
+      \item \emph{Contrastive rescue.} An external contrastive (SigLIP) score, the one
+            aligned-space signal Qwen lacks, clears chance only on \emph{selection-shaped}
+            tasks, and even given the correct answer no more than ties confidence (Exp.~7). It
+            yields at best a narrow task-gated selector, not a general one.
+      \end{itemize}
+      What survives is \emph{uniform / recoverable} compression: blind $\sim2\times$ temporal
+      reduction (Exp.~1) and per-layer recoverable skipping, where dropped tokens remain
+      available as keys rather than being ranked away.
+\item \textbf{Long-form (EgoSchema) replication.} None of the above is a short-clip
+      artifact. On the 500-question EgoSchema Subset every result holds: the encoder stays
+      uniform ($\gkeep\le0$ per clip), the decoder stays concentrated ($\gm^{*}=+0.69$--$0.83$,
+      26/26) but not causally exploitable (the token-prune closer replicates at $N{=}500$---
+      decoder $\le$ random and \emph{most} negative at the tightest budget), no cheap score
+      (content, temporal position, \emph{or} attention change-point---Exp.~6) picks the frame,
+      and only answer-confidence does.
+      Two effects are \emph{stronger} long-form: the frame-selection lever
+      ($\texttt{single\_best}-\texttt{all}=+21.0$ at matched $N{=}8$, vs MVBench $+12.7$) and
+      \texttt{conf} as the answer-frame marker ($+24\%$ of headroom, within-clip AUC $0.64$,
+      vs $+17\%/0.57$). One nuance: the decoder's \emph{anti}-correlation with frame
+      answerability (Exp.~5) is MVBench-specific---on EgoSchema \texttt{dec\_xi} is merely
+      uninformative, not backwards. The contrastive selector (Exp.~7) replicates as well, more
+      sharply: an aligned-space match, even \emph{given the answer}, ties confidence on MVBench
+      and falls \emph{behind} it long-form ($0.59$ vs $0.64$)---answerability is functional, not
+      retrieval-shaped, increasingly so at long context.
+\end{enumerate}
+
+%======================================================================
+\section{Caveats}
+%======================================================================
+\begin{itemize}
+\item \textbf{Bounded-score prior on $\gm$.} Cosine scores are pulled toward
+      $\gm\le0$ and softmax attention toward $\gm>0$; we therefore trust
+      \emph{relative} and \emph{correlational} statements, not bare signs.
+\item \textbf{$k$-fraction robustness (checked).} The Exp.~2 four-stage signs are stable
+      across $k_{\mathrm{frac}}\in\{0.05,0.10,0.20\}$: the load-bearing stages keep identical
+      sign \emph{and} frac$(\gm{>}0)$ counts---(1) ViT $+0.41/+0.47/+0.53$ (26/26 at each),
+      (2) geometry $-0.30/-0.35/-0.48$ ($\le$1/26), (4) decoder $+0.75/+0.80/+0.88$ (26/26 at
+      each). Magnitudes drift monotonically with $k_{\mathrm{frac}}$ (more of the tail
+      included), with no sign flips. Only stage (3) $\times$query has a $k_{\mathrm{frac}}$-
+      sensitive \emph{magnitude} (mean $-0.66/-0.12/-0.06$) but a stable sign and frac$>0$
+      ($\sim$10/26); no conclusion rests on it. The headline concentration claim is not a
+      $k_{\mathrm{frac}}$ artifact.
+\item \textbf{Scale.} One model (3B), but now \emph{two} datasets (26 MVBench $+$ 26
+      EgoSchema clips for the tail probes; 950 MVBench $+$ up to 500 EgoSchema questions for
+      the accuracy probes) and \emph{three} frame budgets ($8/16/32$). Signs and correlations
+      are stable across clips and across both datasets; absolute magnitudes remain indicative,
+      and a 7B replication is still open.
+\item \textbf{Generic query (now checked).} Exp.~2's main table used a generic prompt
+      (``Describe what happens in the video''). The paired \texttt{-{}-real\_query} run on
+      EgoSchema (\S Exp.~2) substitutes each clip's own question: decoder concentration is
+      \emph{mildly lower} (a generic prompt slightly over-states it) but still universal, and
+      the cheap proxy \emph{strengthens} ($+0.430$ vs $+0.382$). So the real question does not
+      threaten the concentration result and improves the correlational proxy---the concern is
+      resolved, not merely deferred.
+\item \textbf{Experiment 3 scale.} 50 questions per task (950 total)---reliable at the
+      task level. The blind baseline ($43.8\%$) shows a material language prior, so
+      vision- and temporal-attributable accuracy ($+18.4$ over blind) is smaller than
+      the raw numbers suggest.
+\end{itemize}
+
+%======================================================================
+\section{Relation to prior work}\label{sec:related}
+%======================================================================
+The query-guided pre-LLM scoring idea (Exp.~2, stage 3) is inspired by
+CLIP-based training-free pruning for pixel grounding (``LiteLVLM,''
+arXiv:2605.13178), which scores visual tokens by similarity to a CLIP text token
+\emph{before} the language model and splits its budget between query-relevant and
+context-carrying tokens. That method relies on CLIP's \emph{contrastive} shared
+visual/text space. Our Exp.~2 shows the same idea does \emph{not} transfer to
+Qwen2.5-VL, whose projector output is not contrastively text-aligned---at the clip level
+under a generic prompt the input-space query score is uncorrelated with true decoder
+importance (though it is a \emph{coarse} token-level predictor, and a real question recovers
+a clip-level correlation; \S\ref{sec:revision} and \S Exp.~2). The two-population
+(query-relevant $\cup$ context) design principle does carry over in spirit---though Exp.~4
+qualifies even this: selecting the ``query-relevant'' population by importance did not
+beat a uniform keep here, so the two-population idea survives only as a \emph{spread} /
+coverage prior, not a ranking one.
+
+\end{document}
