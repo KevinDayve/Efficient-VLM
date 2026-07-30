@@ -1,0 +1,39 @@
+{
+  "num_frames": 8,
+  "seen": {
+    "EgoSchema": 500
+  },
+  "correct": {
+    "EgoSchema": {
+      "all": 261,
+      "single_mean": 255.25,
+      "single_best": 366,
+      "single_worst": 138,
+      "blind": 154
+    }
+  },
+  "pos_correct": {
+    "EgoSchema": [
+      250.0,
+      256.0,
+      244.0,
+      254.0,
+      264.0,
+      244.0,
+      255.0,
+      275.0
+    ]
+  },
+  "best_pos_hist": {
+    "EgoSchema": [
+      250.0,
+      41.0,
+      17.0,
+      17.0,
+      16.0,
+      6.0,
+      9.0,
+      10.0
+    ]
+  }
+}

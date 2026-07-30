@@ -1,0 +1,273 @@
+{
+  "experiment": "mvbench_anchor_layer_prune",
+  "backbone": "llava_video",
+  "model_name": "llava-hf/llava-onevision-qwen2-7b-ov-hf",
+  "data_root": "/home/ubuntu/Experiments/MVBench",
+  "sampling": "official_frames",
+  "num_frames": 8,
+  "fps": null,
+  "max_frames": 8,
+  "max_pixels": null,
+  "min_pixels": null,
+  "rhos": [
+    0.1
+  ],
+  "band": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "sigma_s": 1.5,
+  "sigma_tau": 1.0,
+  "window": 2,
+  "lambda0": 1.0,
+  "beta": 0.5,
+  "proj_dim": 64,
+  "strategies": [
+    "random_prune",
+    "uniform_prune",
+    "anchor_prune"
+  ],
+  "tasks": [
+    "Action Sequence",
+    "Action Prediction",
+    "Action Antonym",
+    "Fine-grained Action",
+    "Unexpected Action",
+    "Object Existence",
+    "Object Interaction",
+    "Object Shuffle",
+    "Moving Direction",
+    "Action Localization",
+    "Scene Transition",
+    "Action Count",
+    "Moving Count",
+    "Moving Attribute",
+    "State Change",
+    "Character Order",
+    "Egocentric Navigation",
+    "Episodic Reasoning",
+    "Counterfactual Inference"
+  ],
+  "n": 3786,
+  "full_accuracy_mean": 0.49584908434852437,
+  "full_accuracy_micro": 0.4955097728473323,
+  "per_task_seen": {
+    "Action Sequence": 188,
+    "Action Prediction": 200,
+    "Action Antonym": 200,
+    "Fine-grained Action": 200,
+    "Unexpected Action": 200,
+    "Object Existence": 198,
+    "Object Interaction": 200,
+    "Object Shuffle": 200,
+    "Moving Direction": 200,
+    "Action Localization": 200,
+    "Scene Transition": 200,
+    "Action Count": 200,
+    "Moving Count": 200,
+    "Moving Attribute": 200,
+    "State Change": 200,
+    "Character Order": 200,
+    "Egocentric Navigation": 200,
+    "Episodic Reasoning": 200,
+    "Counterfactual Inference": 200
+  },
+  "full_per_task": {
+    "Action Sequence": 0.5904255319148937,
+    "Action Prediction": 0.47,
+    "Action Antonym": 0.76,
+    "Fine-grained Action": 0.4,
+    "Unexpected Action": 0.57,
+    "Object Existence": 0.5707070707070707,
+    "Object Interaction": 0.695,
+    "Object Shuffle": 0.345,
+    "Moving Direction": 0.25,
+    "Action Localization": 0.355,
+    "Scene Transition": 0.785,
+    "Action Count": 0.355,
+    "Moving Count": 0.43,
+    "Moving Attribute": 0.595,
+    "State Change": 0.495,
+    "Character Order": 0.6,
+    "Egocentric Navigation": 0.245,
+    "Episodic Reasoning": 0.465,
+    "Counterfactual Inference": 0.445
+  },
+  "anchor_layer_histogram": {
+    "2": 2669,
+    "3": 436,
+    "4": 604,
+    "5": 7,
+    "6": 2,
+    "7": 62,
+    "8": 6
+  },
+  "anchor_layer_mean": 2.533280507131537,
+  "tail_index_at_anchor_mean": 0.5536681263300709,
+  "latency_ms_full_mean": 612.4989267074768,
+  "latency_ms_pruned_mean": {
+    "0.1": 159.85320727086275
+  },
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Object Existence",
+      "video": "video_11971.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Object Existence",
+      "video": "video_13373.mp4",
+      "reason": "missing file"
+    }
+  ],
+  "table": {
+    "random_prune": {
+      "0.1": {
+        "accuracy_mean": 0.4478275475923852,
+        "accuracy_micro": 0.44770206022187004,
+        "per_task": {
+          "Action Sequence": 0.4787234042553192,
+          "Action Prediction": 0.42,
+          "Action Antonym": 0.735,
+          "Fine-grained Action": 0.39,
+          "Unexpected Action": 0.505,
+          "Object Existence": 0.5,
+          "Object Interaction": 0.57,
+          "Object Shuffle": 0.36,
+          "Moving Direction": 0.245,
+          "Action Localization": 0.29,
+          "Scene Transition": 0.77,
+          "Action Count": 0.335,
+          "Moving Count": 0.4,
+          "Moving Attribute": 0.53,
+          "State Change": 0.48,
+          "Character Order": 0.475,
+          "Egocentric Navigation": 0.235,
+          "Episodic Reasoning": 0.445,
+          "Counterfactual Inference": 0.345
+        }
+      }
+    },
+    "uniform_prune": {
+      "0.1": {
+        "accuracy_mean": 0.459565645254335,
+        "accuracy_micro": 0.45932382461701005,
+        "per_task": {
+          "Action Sequence": 0.526595744680851,
+          "Action Prediction": 0.435,
+          "Action Antonym": 0.74,
+          "Fine-grained Action": 0.395,
+          "Unexpected Action": 0.56,
+          "Object Existence": 0.5151515151515151,
+          "Object Interaction": 0.565,
+          "Object Shuffle": 0.36,
+          "Moving Direction": 0.25,
+          "Action Localization": 0.28,
+          "Scene Transition": 0.775,
+          "Action Count": 0.34,
+          "Moving Count": 0.42,
+          "Moving Attribute": 0.555,
+          "State Change": 0.45,
+          "Character Order": 0.465,
+          "Egocentric Navigation": 0.255,
+          "Episodic Reasoning": 0.47,
+          "Counterfactual Inference": 0.375
+        }
+      }
+    },
+    "anchor_prune": {
+      "0.1": {
+        "accuracy_mean": 0.4557143099528318,
+        "accuracy_micro": 0.45562599049128366,
+        "per_task": {
+          "Action Sequence": 0.4787234042553192,
+          "Action Prediction": 0.42,
+          "Action Antonym": 0.75,
+          "Fine-grained Action": 0.41,
+          "Unexpected Action": 0.545,
+          "Object Existence": 0.48484848484848486,
+          "Object Interaction": 0.62,
+          "Object Shuffle": 0.35,
+          "Moving Direction": 0.235,
+          "Action Localization": 0.28,
+          "Scene Transition": 0.76,
+          "Action Count": 0.35,
+          "Moving Count": 0.395,
+          "Moving Attribute": 0.55,
+          "State Change": 0.475,
+          "Character Order": 0.49,
+          "Egocentric Navigation": 0.25,
+          "Episodic Reasoning": 0.445,
+          "Counterfactual Inference": 0.37
+        }
+      }
+    }
+  }
+}

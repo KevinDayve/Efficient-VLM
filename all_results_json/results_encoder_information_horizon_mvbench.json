@@ -1,0 +1,129 @@
+{
+  "experiment": "encoder_information_horizon_mvbench",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/Experiments/MVBench",
+  "encoder_depth": 32,
+  "exit_layers": [
+    7,
+    15,
+    23,
+    27,
+    31
+  ],
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    }
+  ],
+  "table": {
+    "full": {
+      "acc_mean": 0.7287234042553191,
+      "acc_micro": 0.7287234042553191,
+      "per_task": {
+        "Action Sequence": 0.7287234042553191
+      }
+    },
+    "7": {
+      "acc_mean": 0.24468085106382978,
+      "acc_micro": 0.24468085106382978,
+      "per_task": {
+        "Action Sequence": 0.24468085106382978
+      }
+    },
+    "15": {
+      "acc_mean": 0.28191489361702127,
+      "acc_micro": 0.28191489361702127,
+      "per_task": {
+        "Action Sequence": 0.28191489361702127
+      }
+    },
+    "23": {
+      "acc_mean": 0.4946808510638298,
+      "acc_micro": 0.4946808510638298,
+      "per_task": {
+        "Action Sequence": 0.4946808510638298
+      }
+    },
+    "27": {
+      "acc_mean": 0.5851063829787234,
+      "acc_micro": 0.5851063829787234,
+      "per_task": {
+        "Action Sequence": 0.5851063829787234
+      }
+    },
+    "31": {
+      "acc_mean": 0.7287234042553191,
+      "acc_micro": 0.7287234042553191,
+      "per_task": {
+        "Action Sequence": 0.7287234042553191
+      }
+    }
+  }
+}

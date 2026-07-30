@@ -1,0 +1,774 @@
+{
+  "experiment": "mvbench_anchor_layer_prune",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/Experiments/MVBench",
+  "sampling": "official",
+  "num_frames": 8,
+  "fps": null,
+  "max_frames": 8,
+  "max_pixels": null,
+  "min_pixels": null,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "band": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "sigma_s": 1.5,
+  "sigma_tau": 1.0,
+  "window": 2,
+  "lambda0": 1.0,
+  "beta": 0.5,
+  "proj_dim": 64,
+  "strategies": [
+    "random_prune",
+    "uniform_prune",
+    "anchor_prune"
+  ],
+  "tasks": [
+    "Action Sequence",
+    "Action Prediction",
+    "Action Antonym",
+    "Fine-grained Action",
+    "Unexpected Action",
+    "Object Existence",
+    "Object Interaction",
+    "Object Shuffle",
+    "Moving Direction",
+    "Action Localization",
+    "Scene Transition",
+    "Action Count",
+    "Moving Count",
+    "Moving Attribute",
+    "State Change",
+    "Character Order",
+    "Egocentric Navigation",
+    "Episodic Reasoning",
+    "Counterfactual Inference"
+  ],
+  "n": 3732,
+  "full_accuracy_mean": 0.621014084429538,
+  "full_accuracy_micro": 0.6237942122186495,
+  "per_task_seen": {
+    "Action Sequence": 188,
+    "Action Prediction": 200,
+    "Action Antonym": 200,
+    "Fine-grained Action": 200,
+    "Unexpected Action": 198,
+    "Object Existence": 198,
+    "Object Interaction": 200,
+    "Object Shuffle": 200,
+    "Moving Direction": 200,
+    "Action Localization": 148,
+    "Scene Transition": 200,
+    "Action Count": 200,
+    "Moving Count": 200,
+    "Moving Attribute": 200,
+    "State Change": 200,
+    "Character Order": 200,
+    "Egocentric Navigation": 200,
+    "Episodic Reasoning": 200,
+    "Counterfactual Inference": 200
+  },
+  "full_per_task": {
+    "Action Sequence": 0.6542553191489362,
+    "Action Prediction": 0.58,
+    "Action Antonym": 0.825,
+    "Fine-grained Action": 0.45,
+    "Unexpected Action": 0.7727272727272727,
+    "Object Existence": 0.8636363636363636,
+    "Object Interaction": 0.69,
+    "Object Shuffle": 0.39,
+    "Moving Direction": 0.45,
+    "Action Localization": 0.39864864864864863,
+    "Scene Transition": 0.89,
+    "Action Count": 0.51,
+    "Moving Count": 0.64,
+    "Moving Attribute": 0.875,
+    "State Change": 0.53,
+    "Character Order": 0.69,
+    "Egocentric Navigation": 0.375,
+    "Episodic Reasoning": 0.51,
+    "Counterfactual Inference": 0.705
+  },
+  "anchor_layer_histogram": {
+    "2": 202,
+    "3": 109,
+    "4": 1079,
+    "5": 698,
+    "6": 220,
+    "7": 156,
+    "8": 1268
+  },
+  "anchor_layer_mean": 5.651929260450161,
+  "tail_index_at_anchor_mean": 0.6638663978917806,
+  "latency_ms_full_mean": 372.2669055973258,
+  "latency_ms_pruned_mean": {
+    "0.01": 100.40047308487472,
+    "0.05": 103.0062146476024,
+    "0.1": 112.61869414822056,
+    "0.25": 139.79627965341632
+  },
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Unexpected Action",
+      "video": "test_magic/M_Z_3_4314_4512.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 624.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 547.44 MiB is free. Including non-PyTorch memory, this process has 21.52 GiB memory in use. Of the allocated memory 19.96 GiB is allocated by PyTorch, and 1.25 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Unexpected Action",
+      "video": "test_magic/M_Z_280_6258_6451.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 622.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 587.44 MiB is free. Including non-PyTorch memory, this process has 21.48 GiB memory in use. Of the allocated memory 19.90 GiB is allocated by PyTorch, and 1.27 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Object Existence",
+      "video": "video_11971.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Object Existence",
+      "video": "video_13373.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Localization",
+      "video": "I52A6.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 432.12 MiB is free. Including non-PyTorch memory, this process has 18.47 GiB memory in use. Process 617752 has 3.15 GiB memory in use. Of the allocated memory 16.94 GiB is allocated by PyTorch, and 1.23 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "YT2C3.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 316.12 MiB is free. Including non-PyTorch memory, this process has 18.50 GiB memory in use. Process 617752 has 3.24 GiB memory in use. Of the allocated memory 16.97 GiB is allocated by PyTorch, and 1.23 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "JTXAM.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 142.12 MiB is free. Including non-PyTorch memory, this process has 18.67 GiB memory in use. Process 617752 has 3.24 GiB memory in use. Of the allocated memory 17.48 GiB is allocated by PyTorch, and 908.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "2443O.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 134.12 MiB is free. Including non-PyTorch memory, this process has 18.67 GiB memory in use. Process 617752 has 3.24 GiB memory in use. Of the allocated memory 17.56 GiB is allocated by PyTorch, and 823.63 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ME4YL.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 212.12 MiB is free. Including non-PyTorch memory, this process has 18.59 GiB memory in use. Process 617752 has 3.25 GiB memory in use. Of the allocated memory 17.20 GiB is allocated by PyTorch, and 1.08 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "RNLTR.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 176.12 MiB is free. Including non-PyTorch memory, this process has 18.62 GiB memory in use. Process 617752 has 3.25 GiB memory in use. Of the allocated memory 17.22 GiB is allocated by PyTorch, and 1.10 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ICQZX.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 224.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 5.99 GiB memory in use. Of the allocated memory 14.41 GiB is allocated by PyTorch, and 1.12 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "S06H3.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 284.12 MiB is free. Including non-PyTorch memory, this process has 15.77 GiB memory in use. Process 618151 has 6.00 GiB memory in use. Of the allocated memory 13.87 GiB is allocated by PyTorch, and 1.60 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "GL2JW.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 452.12 MiB is free. Including non-PyTorch memory, this process has 15.60 GiB memory in use. Process 618151 has 6.00 GiB memory in use. Of the allocated memory 14.10 GiB is allocated by PyTorch, and 1.19 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "XT9D4.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 198.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.02 GiB memory in use. Of the allocated memory 14.39 GiB is allocated by PyTorch, and 1.14 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "T9N9R.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 210.12 MiB is free. Including non-PyTorch memory, this process has 15.81 GiB memory in use. Process 618151 has 6.03 GiB memory in use. Of the allocated memory 14.38 GiB is allocated by PyTorch, and 1.12 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ONMCW.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 322.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 264.12 MiB is free. Including non-PyTorch memory, this process has 15.75 GiB memory in use. Process 618151 has 6.04 GiB memory in use. Of the allocated memory 12.17 GiB is allocated by PyTorch, and 3.28 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "9YOI8.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 38.12 MiB is free. Including non-PyTorch memory, this process has 15.96 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 14.47 GiB is allocated by PyTorch, and 1.19 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "1GGRY.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 564.12 MiB is free. Including non-PyTorch memory, this process has 15.36 GiB memory in use. Process 618151 has 6.13 GiB memory in use. Of the allocated memory 14.16 GiB is allocated by PyTorch, and 923.14 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "PH5VU.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 586.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 32.12 MiB is free. Including non-PyTorch memory, this process has 15.88 GiB memory in use. Process 618151 has 6.14 GiB memory in use. Of the allocated memory 14.19 GiB is allocated by PyTorch, and 1.38 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "K5NFS.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.39 GiB is allocated by PyTorch, and 1.14 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "URK3G.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.38 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "LLQBB.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.67 GiB is allocated by PyTorch, and 884.38 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "PTAZ9.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 500.12 MiB is free. Including non-PyTorch memory, this process has 15.38 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.16 GiB is allocated by PyTorch, and 941.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ECW3E.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 584.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 500.12 MiB is free. Including non-PyTorch memory, this process has 15.38 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 11.62 GiB is allocated by PyTorch, and 3.46 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "7EJUR.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 184.12 MiB is free. Including non-PyTorch memory, this process has 15.69 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 742.10 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "GFK4S.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 184.12 MiB is free. Including non-PyTorch memory, this process has 15.69 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 751.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ZHRPD.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 182.12 MiB is free. Including non-PyTorch memory, this process has 15.70 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.47 GiB is allocated by PyTorch, and 946.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "O1LMX.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 182.12 MiB is free. Including non-PyTorch memory, this process has 15.70 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.47 GiB is allocated by PyTorch, and 946.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "N86ED.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.39 GiB is allocated by PyTorch, and 1.14 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "50E06.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.69 GiB is allocated by PyTorch, and 858.21 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "XRG9K.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 40.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.67 GiB is allocated by PyTorch, and 875.91 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "8CCEV.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 168.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 14.65 GiB is allocated by PyTorch, and 895.44 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "Q3BCC.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 168.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 890.20 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "3CLVI.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 230.12 MiB is free. Including non-PyTorch memory, this process has 15.77 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 13.86 GiB is allocated by PyTorch, and 1.61 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "WKVWF.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 140.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.07 GiB memory in use. Of the allocated memory 14.41 GiB is allocated by PyTorch, and 1.12 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "1LBUG.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 120.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.09 GiB memory in use. Of the allocated memory 14.41 GiB is allocated by PyTorch, and 1.12 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "5I5E5.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 106.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.11 GiB memory in use. Of the allocated memory 14.69 GiB is allocated by PyTorch, and 859.55 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "ALJ7B.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 106.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.11 GiB memory in use. Of the allocated memory 14.67 GiB is allocated by PyTorch, and 875.91 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "S2S7I.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 98.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.12 GiB memory in use. Of the allocated memory 14.68 GiB is allocated by PyTorch, and 874.34 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "UM5II.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 92.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.12 GiB memory in use. Of the allocated memory 14.38 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "RX7TC.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 158.12 MiB is free. Including non-PyTorch memory, this process has 15.77 GiB memory in use. Process 618151 has 6.12 GiB memory in use. Of the allocated memory 13.87 GiB is allocated by PyTorch, and 1.60 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "DAA3F.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 332.12 MiB is free. Including non-PyTorch memory, this process has 15.60 GiB memory in use. Process 618151 has 6.12 GiB memory in use. Of the allocated memory 14.09 GiB is allocated by PyTorch, and 1.20 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "7IPW7.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 48.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.16 GiB memory in use. Of the allocated memory 14.38 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "JCT0K.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 48.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.16 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 888.74 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "0KZYF.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 530.12 MiB is free. Including non-PyTorch memory, this process has 15.36 GiB memory in use. Process 618151 has 6.16 GiB memory in use. Of the allocated memory 14.16 GiB is allocated by PyTorch, and 923.16 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "AFIRW.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 666.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 530.12 MiB is free. Including non-PyTorch memory, this process has 15.36 GiB memory in use. Process 618151 has 6.16 GiB memory in use. Of the allocated memory 12.96 GiB is allocated by PyTorch, and 2.10 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "K6W5I.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 610.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 504.12 MiB is free. Including non-PyTorch memory, this process has 15.38 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.18 GiB is allocated by PyTorch, and 923.08 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "KK7D4.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.38 GiB is allocated by PyTorch, and 1.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "W0XPU.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.65 GiB is allocated by PyTorch, and 895.43 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "3J9L5.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.69 GiB is allocated by PyTorch, and 860.43 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "4H935.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 554.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 888.73 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "HLB3J.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.69 GiB is allocated by PyTorch, and 861.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "Y0MCG.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 44.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.17 GiB memory in use. Of the allocated memory 14.41 GiB is allocated by PyTorch, and 1.12 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "VFAE3.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 166.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 14.67 GiB is allocated by PyTorch, and 884.37 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "HSKVH.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 164.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.05 GiB memory in use. Of the allocated memory 14.66 GiB is allocated by PyTorch, and 885.21 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    },
+    {
+      "task": "Action Localization",
+      "video": "GLSU2.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 556.00 MiB. GPU 0 has a total capacity of 22.06 GiB of which 96.12 MiB is free. Including non-PyTorch memory, this process has 15.83 GiB memory in use. Process 618151 has 6.12 GiB memory in use. Of the allocated memory 14.39 GiB is allocated by PyTorch, and 1.14 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    }
+  ],
+  "table": {
+    "random_prune": {
+      "0.01": {
+        "accuracy_mean": 0.46827436007727163,
+        "accuracy_micro": 0.4694533762057878,
+        "per_task": {
+          "Action Sequence": 0.32978723404255317,
+          "Action Prediction": 0.395,
+          "Action Antonym": 0.76,
+          "Fine-grained Action": 0.435,
+          "Unexpected Action": 0.6616161616161617,
+          "Object Existence": 0.5404040404040404,
+          "Object Interaction": 0.395,
+          "Object Shuffle": 0.31,
+          "Moving Direction": 0.38,
+          "Action Localization": 0.40540540540540543,
+          "Scene Transition": 0.73,
+          "Action Count": 0.505,
+          "Moving Count": 0.435,
+          "Moving Attribute": 0.45,
+          "State Change": 0.43,
+          "Character Order": 0.52,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.425,
+          "Counterfactual Inference": 0.42
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5310819814011304,
+        "accuracy_micro": 0.5326902465166131,
+        "per_task": {
+          "Action Sequence": 0.4574468085106383,
+          "Action Prediction": 0.445,
+          "Action Antonym": 0.8,
+          "Fine-grained Action": 0.44,
+          "Unexpected Action": 0.7222222222222222,
+          "Object Existence": 0.696969696969697,
+          "Object Interaction": 0.52,
+          "Object Shuffle": 0.34,
+          "Moving Direction": 0.41,
+          "Action Localization": 0.4189189189189189,
+          "Scene Transition": 0.845,
+          "Action Count": 0.5,
+          "Moving Count": 0.46,
+          "Moving Attribute": 0.645,
+          "State Change": 0.45,
+          "Character Order": 0.585,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.47,
+          "Counterfactual Inference": 0.515
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5594952842489236,
+        "accuracy_micro": 0.5618971061093248,
+        "per_task": {
+          "Action Sequence": 0.5372340425531915,
+          "Action Prediction": 0.505,
+          "Action Antonym": 0.78,
+          "Fine-grained Action": 0.47,
+          "Unexpected Action": 0.7676767676767676,
+          "Object Existence": 0.7121212121212122,
+          "Object Interaction": 0.565,
+          "Object Shuffle": 0.365,
+          "Moving Direction": 0.395,
+          "Action Localization": 0.3783783783783784,
+          "Scene Transition": 0.87,
+          "Action Count": 0.515,
+          "Moving Count": 0.505,
+          "Moving Attribute": 0.735,
+          "State Change": 0.48,
+          "Character Order": 0.635,
+          "Egocentric Navigation": 0.375,
+          "Episodic Reasoning": 0.495,
+          "Counterfactual Inference": 0.545
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5859972198606017,
+        "accuracy_micro": 0.5889603429796356,
+        "per_task": {
+          "Action Sequence": 0.5638297872340425,
+          "Action Prediction": 0.545,
+          "Action Antonym": 0.805,
+          "Fine-grained Action": 0.46,
+          "Unexpected Action": 0.7525252525252525,
+          "Object Existence": 0.7727272727272727,
+          "Object Interaction": 0.65,
+          "Object Shuffle": 0.36,
+          "Moving Direction": 0.405,
+          "Action Localization": 0.36486486486486486,
+          "Scene Transition": 0.88,
+          "Action Count": 0.505,
+          "Moving Count": 0.565,
+          "Moving Attribute": 0.815,
+          "State Change": 0.515,
+          "Character Order": 0.675,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.485,
+          "Counterfactual Inference": 0.645
+        }
+      }
+    },
+    "uniform_prune": {
+      "0.01": {
+        "accuracy_mean": 0.43309841247131287,
+        "accuracy_micro": 0.4338156484458735,
+        "per_task": {
+          "Action Sequence": 0.2765957446808511,
+          "Action Prediction": 0.33,
+          "Action Antonym": 0.76,
+          "Fine-grained Action": 0.36,
+          "Unexpected Action": 0.6464646464646465,
+          "Object Existence": 0.5404040404040404,
+          "Object Interaction": 0.29,
+          "Object Shuffle": 0.3,
+          "Moving Direction": 0.355,
+          "Action Localization": 0.40540540540540543,
+          "Scene Transition": 0.595,
+          "Action Count": 0.5,
+          "Moving Count": 0.39,
+          "Moving Attribute": 0.375,
+          "State Change": 0.44,
+          "Character Order": 0.485,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.41,
+          "Counterfactual Inference": 0.4
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5113490600444687,
+        "accuracy_micro": 0.5128617363344051,
+        "per_task": {
+          "Action Sequence": 0.44148936170212766,
+          "Action Prediction": 0.42,
+          "Action Antonym": 0.78,
+          "Fine-grained Action": 0.445,
+          "Unexpected Action": 0.6666666666666666,
+          "Object Existence": 0.7070707070707071,
+          "Object Interaction": 0.46,
+          "Object Shuffle": 0.33,
+          "Moving Direction": 0.35,
+          "Action Localization": 0.40540540540540543,
+          "Scene Transition": 0.825,
+          "Action Count": 0.48,
+          "Moving Count": 0.455,
+          "Moving Attribute": 0.64,
+          "State Change": 0.465,
+          "Character Order": 0.575,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.45,
+          "Counterfactual Inference": 0.45
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5508823350480686,
+        "accuracy_micro": 0.5533226152197214,
+        "per_task": {
+          "Action Sequence": 0.48404255319148937,
+          "Action Prediction": 0.465,
+          "Action Antonym": 0.795,
+          "Fine-grained Action": 0.47,
+          "Unexpected Action": 0.7323232323232324,
+          "Object Existence": 0.702020202020202,
+          "Object Interaction": 0.52,
+          "Object Shuffle": 0.375,
+          "Moving Direction": 0.37,
+          "Action Localization": 0.3783783783783784,
+          "Scene Transition": 0.865,
+          "Action Count": 0.53,
+          "Moving Count": 0.53,
+          "Moving Attribute": 0.72,
+          "State Change": 0.51,
+          "Character Order": 0.615,
+          "Egocentric Navigation": 0.38,
+          "Episodic Reasoning": 0.475,
+          "Counterfactual Inference": 0.55
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5906404240950714,
+        "accuracy_micro": 0.5932475884244373,
+        "per_task": {
+          "Action Sequence": 0.574468085106383,
+          "Action Prediction": 0.52,
+          "Action Antonym": 0.81,
+          "Fine-grained Action": 0.49,
+          "Unexpected Action": 0.7525252525252525,
+          "Object Existence": 0.8282828282828283,
+          "Object Interaction": 0.6,
+          "Object Shuffle": 0.38,
+          "Moving Direction": 0.415,
+          "Action Localization": 0.3918918918918919,
+          "Scene Transition": 0.905,
+          "Action Count": 0.515,
+          "Moving Count": 0.585,
+          "Moving Attribute": 0.83,
+          "State Change": 0.53,
+          "Character Order": 0.63,
+          "Egocentric Navigation": 0.355,
+          "Episodic Reasoning": 0.47,
+          "Counterfactual Inference": 0.64
+        }
+      }
+    },
+    "anchor_prune": {
+      "0.01": {
+        "accuracy_mean": 0.4455928890307389,
+        "accuracy_micro": 0.44640943193997856,
+        "per_task": {
+          "Action Sequence": 0.2872340425531915,
+          "Action Prediction": 0.38,
+          "Action Antonym": 0.755,
+          "Fine-grained Action": 0.34,
+          "Unexpected Action": 0.6515151515151515,
+          "Object Existence": 0.5353535353535354,
+          "Object Interaction": 0.325,
+          "Object Shuffle": 0.275,
+          "Moving Direction": 0.355,
+          "Action Localization": 0.41216216216216217,
+          "Scene Transition": 0.6,
+          "Action Count": 0.535,
+          "Moving Count": 0.41,
+          "Moving Attribute": 0.355,
+          "State Change": 0.445,
+          "Character Order": 0.605,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.435,
+          "Counterfactual Inference": 0.395
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5188779597066271,
+        "accuracy_micro": 0.5209003215434084,
+        "per_task": {
+          "Action Sequence": 0.42021276595744683,
+          "Action Prediction": 0.465,
+          "Action Antonym": 0.77,
+          "Fine-grained Action": 0.455,
+          "Unexpected Action": 0.7121212121212122,
+          "Object Existence": 0.6212121212121212,
+          "Object Interaction": 0.53,
+          "Object Shuffle": 0.32,
+          "Moving Direction": 0.385,
+          "Action Localization": 0.38513513513513514,
+          "Scene Transition": 0.87,
+          "Action Count": 0.52,
+          "Moving Count": 0.475,
+          "Moving Attribute": 0.57,
+          "State Change": 0.475,
+          "Character Order": 0.64,
+          "Egocentric Navigation": 0.375,
+          "Episodic Reasoning": 0.44,
+          "Counterfactual Inference": 0.43
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.5638111281392358,
+        "accuracy_micro": 0.5664523043944266,
+        "per_task": {
+          "Action Sequence": 0.5106382978723404,
+          "Action Prediction": 0.525,
+          "Action Antonym": 0.75,
+          "Fine-grained Action": 0.45,
+          "Unexpected Action": 0.7373737373737373,
+          "Object Existence": 0.7777777777777778,
+          "Object Interaction": 0.58,
+          "Object Shuffle": 0.35,
+          "Moving Direction": 0.41,
+          "Action Localization": 0.3716216216216216,
+          "Scene Transition": 0.855,
+          "Action Count": 0.52,
+          "Moving Count": 0.535,
+          "Moving Attribute": 0.72,
+          "State Change": 0.505,
+          "Character Order": 0.705,
+          "Egocentric Navigation": 0.38,
+          "Episodic Reasoning": 0.47,
+          "Counterfactual Inference": 0.56
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.5974117678708943,
+        "accuracy_micro": 0.59994640943194,
+        "per_task": {
+          "Action Sequence": 0.601063829787234,
+          "Action Prediction": 0.55,
+          "Action Antonym": 0.795,
+          "Fine-grained Action": 0.455,
+          "Unexpected Action": 0.7626262626262627,
+          "Object Existence": 0.8484848484848485,
+          "Object Interaction": 0.64,
+          "Object Shuffle": 0.355,
+          "Moving Direction": 0.405,
+          "Action Localization": 0.39864864864864863,
+          "Scene Transition": 0.88,
+          "Action Count": 0.495,
+          "Moving Count": 0.605,
+          "Moving Attribute": 0.845,
+          "State Change": 0.52,
+          "Character Order": 0.68,
+          "Egocentric Navigation": 0.37,
+          "Episodic Reasoning": 0.485,
+          "Counterfactual Inference": 0.66
+        }
+      }
+    }
+  }
+}

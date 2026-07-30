@@ -1,0 +1,45 @@
+{
+  "settings": [
+    "full",
+    "decoder@0.01",
+    "encquery@0.01",
+    "random@0.01",
+    "uniform@0.01",
+    "decoder@0.05",
+    "encquery@0.05",
+    "random@0.05",
+    "uniform@0.05",
+    "decoder@0.1",
+    "encquery@0.1",
+    "random@0.1",
+    "uniform@0.1",
+    "decoder@0.25",
+    "encquery@0.25",
+    "random@0.25",
+    "uniform@0.25"
+  ],
+  "seen": {
+    "EgoSchema": 200
+  },
+  "correct": {
+    "EgoSchema": {
+      "full": 125,
+      "decoder@0.01": 69,
+      "encquery@0.01": 75,
+      "random@0.01": 72,
+      "uniform@0.01": 73,
+      "decoder@0.05": 89,
+      "encquery@0.05": 92,
+      "random@0.05": 85,
+      "uniform@0.05": 90,
+      "decoder@0.1": 105,
+      "encquery@0.1": 100,
+      "random@0.1": 96,
+      "uniform@0.1": 98,
+      "decoder@0.25": 118,
+      "encquery@0.25": 104,
+      "random@0.25": 112,
+      "uniform@0.25": 114
+    }
+  }
+}

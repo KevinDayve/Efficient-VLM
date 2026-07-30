@@ -1,0 +1,142 @@
+{
+  "experiment": "mvbench_anchor_layer_ablations",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "../MVBench/",
+  "rhos": [
+    0.1
+  ],
+  "band": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "sigma_s": 1.5,
+  "sigma_tau": 1.0,
+  "window": 2,
+  "lambda0": 1.0,
+  "beta": 0.5,
+  "proj_dim": 64,
+  "ablations_run": [
+    "lambda_schedule"
+  ],
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "full_accuracy_mean": 0.6276595744680851,
+  "full_accuracy_micro": 0.6276595744680851,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    }
+  ],
+  "results": {
+    "lambda_schedule": {
+      "constant": {
+        "L_star_mean": 5.175531914893617,
+        "L_star_histogram": {
+          "2": 12,
+          "4": 51,
+          "5": 59,
+          "6": 39,
+          "8": 27
+        },
+        "per_rho": {
+          "0.1": {
+            "accuracy_mean": 0.5638297872340425,
+            "accuracy_micro": 0.5638297872340425,
+            "per_task": {
+              "Action Sequence": 0.5638297872340425
+            }
+          }
+        }
+      },
+      "rho_indexed_beta0.5": {
+        "L_star_mean": 5.175531914893617,
+        "L_star_histogram": {
+          "2": 12,
+          "4": 51,
+          "5": 59,
+          "6": 39,
+          "8": 27
+        },
+        "per_rho": {
+          "0.1": {
+            "accuracy_mean": 0.5531914893617021,
+            "accuracy_micro": 0.5531914893617021,
+            "per_task": {
+              "Action Sequence": 0.5531914893617021
+            }
+          }
+        }
+      }
+    }
+  }
+}

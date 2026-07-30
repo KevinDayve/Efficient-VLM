@@ -1,0 +1,173 @@
+{
+  "experiment": "vision_encoder_tail_index_mvbench",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/Experiments/MVBench",
+  "sampling": "official",
+  "num_frames": 16,
+  "fps": null,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "encoder_depth": 32,
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "gamma_curve_overall": [
+    0.07276883721351624,
+    -0.005930370155801164,
+    -0.07717846175457568,
+    -0.006073595044460703,
+    -0.08143782393729433,
+    -0.016290001412655446,
+    0.041905267441526374,
+    0.06698824687206999,
+    0.07099873651849463,
+    0.06117999204929839,
+    0.08286027388369784,
+    0.2007314702297779,
+    0.18018026776770327,
+    0.19028306704886416,
+    0.23230923426912187,
+    0.06085158345547128,
+    0.27624669829581644,
+    0.21658486825354556,
+    0.1567070110047117,
+    0.21330168018949794,
+    0.2202173648996556,
+    0.27446260858089366,
+    0.20067686413196809,
+    0.13617867611824197,
+    0.2605879046815507,
+    0.17780411497075507,
+    0.240610955877507,
+    0.2822592099930378,
+    0.33392072104393167,
+    0.3279493914005604,
+    0.394732210864412,
+    0.30031569206968267
+  ],
+  "gamma_curve_by_task": {
+    "Action Sequence": [
+      0.07276883721351624,
+      -0.005930370155801164,
+      -0.07717846175457568,
+      -0.006073595044460703,
+      -0.08143782393729433,
+      -0.016290001412655446,
+      0.041905267441526374,
+      0.06698824687206999,
+      0.07099873651849463,
+      0.06117999204929839,
+      0.08286027388369784,
+      0.2007314702297779,
+      0.18018026776770327,
+      0.19028306704886416,
+      0.23230923426912187,
+      0.06085158345547128,
+      0.27624669829581644,
+      0.21658486825354556,
+      0.1567070110047117,
+      0.21330168018949794,
+      0.2202173648996556,
+      0.27446260858089366,
+      0.20067686413196809,
+      0.13617867611824197,
+      0.2605879046815507,
+      0.17780411497075507,
+      0.240610955877507,
+      0.2822592099930378,
+      0.33392072104393167,
+      0.3279493914005604,
+      0.394732210864412,
+      0.30031569206968267
+    ]
+  },
+  "E_star_overall": 30,
+  "E_star_histogram": {
+    "0": 32,
+    "1": 6,
+    "3": 6,
+    "5": 1,
+    "11": 3,
+    "13": 2,
+    "14": 2,
+    "16": 4,
+    "17": 1,
+    "21": 3,
+    "24": 12,
+    "26": 3,
+    "28": 7,
+    "29": 11,
+    "30": 86,
+    "31": 9
+  },
+  "E_star_mean": 21.27659574468085,
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "num_frames": 16,
+  "seen": {
+    "EgoSchema": 500
+  },
+  "correct": {
+    "EgoSchema": {
+      "all": 290,
+      "single_mean": 256.875,
+      "single_best": 387,
+      "single_worst": 114,
+      "blind": 154
+    }
+  }
+}

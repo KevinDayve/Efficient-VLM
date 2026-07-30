@@ -1,0 +1,261 @@
+{
+  "experiment": "mvbench_lcds",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "../MVBench/",
+  "sampling": "official",
+  "num_frames": 16,
+  "fps": null,
+  "max_frames": 8,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25
+  ],
+  "layer_stride": 4,
+  "min_select_layer": 7,
+  "select_layers": [
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32
+  ],
+  "feature_hs_idx": 36,
+  "cand_mult": 2.0,
+  "strategies": [
+    "random",
+    "uniform",
+    "attention_topk",
+    "lcds",
+    "lcds_dpp"
+  ],
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "full_accuracy_mean": 0.7287234042553191,
+  "full_accuracy_micro": 0.7287234042553191,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "full_per_task": {
+    "Action Sequence": 0.7287234042553191
+  },
+  "table": {
+    "random": {
+      "0.01": {
+        "accuracy_mean": 0.425531914893617,
+        "accuracy_micro": 0.425531914893617,
+        "dispersion": 0.49485460992907804,
+        "frames_touched": 0.9248670212765957,
+        "temporal_entropy": 0.9004202565669837,
+        "per_task": {
+          "Action Sequence": 0.425531914893617
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5691489361702128,
+        "accuracy_micro": 0.5691489361702128,
+        "dispersion": 0.5018523703196297,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9829787109886878,
+        "per_task": {
+          "Action Sequence": 0.5691489361702128
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.6063829787234043,
+        "accuracy_micro": 0.6063829787234043,
+        "dispersion": 0.5001693898592957,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9922354301032658,
+        "per_task": {
+          "Action Sequence": 0.6063829787234043
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.6968085106382979,
+        "accuracy_micro": 0.6968085106382979,
+        "dispersion": 0.501860441929511,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9973432336481737,
+        "per_task": {
+          "Action Sequence": 0.6968085106382979
+        }
+      }
+    },
+    "uniform": {
+      "0.01": {
+        "accuracy_mean": 0.39893617021276595,
+        "accuracy_micro": 0.39893617021276595,
+        "dispersion": 0.6267139479905437,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9911080027821146,
+        "per_task": {
+          "Action Sequence": 0.39893617021276595
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.5319148936170213,
+        "accuracy_micro": 0.5319148936170213,
+        "dispersion": 0.5274283857395561,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9995871522530129,
+        "per_task": {
+          "Action Sequence": 0.5319148936170213
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.601063829787234,
+        "accuracy_micro": 0.601063829787234,
+        "dispersion": 0.5030456741326306,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9999422383386414,
+        "per_task": {
+          "Action Sequence": 0.601063829787234
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.6808510638297872,
+        "accuracy_micro": 0.6808510638297872,
+        "dispersion": 0.458967639247534,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9999873195844913,
+        "per_task": {
+          "Action Sequence": 0.6808510638297872
+        }
+      }
+    },
+    "attention_topk": {
+      "0.01": {
+        "accuracy_mean": 0.42021276595744683,
+        "accuracy_micro": 0.42021276595744683,
+        "dispersion": 0.29688488740470753,
+        "frames_touched": 0.9261968085106383,
+        "temporal_entropy": 0.8118016040558654,
+        "per_task": {
+          "Action Sequence": 0.42021276595744683
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.6436170212765957,
+        "accuracy_micro": 0.6436170212765957,
+        "dispersion": 0.5163863013193074,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.8979567515523069,
+        "per_task": {
+          "Action Sequence": 0.6436170212765957
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7180851063829787,
+        "accuracy_micro": 0.7180851063829787,
+        "dispersion": 0.5367632900527413,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9353504601655119,
+        "per_task": {
+          "Action Sequence": 0.7180851063829787
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.723404255319149,
+        "accuracy_micro": 0.723404255319149,
+        "dispersion": 0.5196863027460062,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9681705134765057,
+        "per_task": {
+          "Action Sequence": 0.723404255319149
+        }
+      }
+    },
+    "lcds": {
+      "0.01": {
+        "accuracy_mean": 0.46808510638297873,
+        "accuracy_micro": 0.46808510638297873,
+        "dispersion": 0.554604131854955,
+        "frames_touched": 0.8264627659574468,
+        "temporal_entropy": 0.8016239999896242,
+        "per_task": {
+          "Action Sequence": 0.46808510638297873
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.6329787234042553,
+        "accuracy_micro": 0.6329787234042553,
+        "dispersion": 0.5255788282924654,
+        "frames_touched": 0.9993351063829787,
+        "temporal_entropy": 0.9459777470186248,
+        "per_task": {
+          "Action Sequence": 0.6329787234042553
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.6170212765957447,
+        "accuracy_micro": 0.6170212765957447,
+        "dispersion": 0.51534577149728,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9676491576861591,
+        "per_task": {
+          "Action Sequence": 0.6170212765957447
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.648936170212766,
+        "accuracy_micro": 0.648936170212766,
+        "dispersion": 0.5067051858912651,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9898279091740906,
+        "per_task": {
+          "Action Sequence": 0.648936170212766
+        }
+      }
+    },
+    "lcds_dpp": {
+      "0.01": {
+        "accuracy_mean": 0.4946808510638298,
+        "accuracy_micro": 0.4946808510638298,
+        "dispersion": 0.42555647223896975,
+        "frames_touched": 0.776595744680851,
+        "temporal_entropy": 0.692253660494126,
+        "per_task": {
+          "Action Sequence": 0.4946808510638298
+        }
+      },
+      "0.05": {
+        "accuracy_mean": 0.6382978723404256,
+        "accuracy_micro": 0.6382978723404256,
+        "dispersion": 0.537362823518843,
+        "frames_touched": 0.9993351063829787,
+        "temporal_entropy": 0.893717318433186,
+        "per_task": {
+          "Action Sequence": 0.6382978723404256
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7127659574468085,
+        "accuracy_micro": 0.7127659574468085,
+        "dispersion": 0.5354235566698602,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9331958444022485,
+        "per_task": {
+          "Action Sequence": 0.7127659574468085
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.7180851063829787,
+        "accuracy_micro": 0.7180851063829787,
+        "dispersion": 0.5214882376009009,
+        "frames_touched": 1.0,
+        "temporal_entropy": 0.9644628189960897,
+        "per_task": {
+          "Action Sequence": 0.7180851063829787
+        }
+      }
+    }
+  }
+}

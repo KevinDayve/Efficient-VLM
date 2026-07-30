@@ -1,0 +1,91 @@
+{
+  "experiment": "mvbench_anchor_layer_prune",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "../MVBench/",
+  "sampling": "fps",
+  "num_frames": null,
+  "fps": 2.0,
+  "max_frames": 8,
+  "max_pixels": null,
+  "min_pixels": null,
+  "rhos": [
+    0.01
+  ],
+  "band": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "sigma_s": 1.5,
+  "sigma_tau": 1.0,
+  "window": 2,
+  "lambda0": 1.0,
+  "beta": 0.5,
+  "proj_dim": 64,
+  "strategies": [
+    "random_prune",
+    "uniform_prune",
+    "anchor_prune"
+  ],
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "full_accuracy_mean": 0.6595744680851063,
+  "full_accuracy_micro": 0.6595744680851063,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "full_per_task": {
+    "Action Sequence": 0.6595744680851063
+  },
+  "anchor_layer_histogram": {
+    "2": 10,
+    "3": 3,
+    "4": 51,
+    "5": 80,
+    "6": 12,
+    "8": 32
+  },
+  "anchor_layer_mean": 5.111702127659575,
+  "tail_index_at_anchor_mean": 0.6350019979984203,
+  "latency_ms_full_mean": 163.35576399231942,
+  "latency_ms_pruned_mean": {
+    "0.01": 63.12658317372242
+  },
+  "table": {
+    "random_prune": {
+      "0.01": {
+        "accuracy_mean": 0.3776595744680851,
+        "accuracy_micro": 0.3776595744680851,
+        "per_task": {
+          "Action Sequence": 0.3776595744680851
+        }
+      }
+    },
+    "uniform_prune": {
+      "0.01": {
+        "accuracy_mean": 0.3191489361702128,
+        "accuracy_micro": 0.3191489361702128,
+        "per_task": {
+          "Action Sequence": 0.3191489361702128
+        }
+      }
+    },
+    "anchor_prune": {
+      "0.01": {
+        "accuracy_mean": 0.30319148936170215,
+        "accuracy_micro": 0.30319148936170215,
+        "per_task": {
+          "Action Sequence": 0.30319148936170215
+        }
+      }
+    }
+  }
+}

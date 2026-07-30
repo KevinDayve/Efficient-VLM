@@ -1,0 +1,203 @@
+{
+  "experiment": "mvbench_anchor_layer_ablations",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "../MVBench/",
+  "rhos": [
+    0.01
+  ],
+  "band": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "k_frac": 0.1,
+  "estimator": "moment",
+  "sigma_s": 1.5,
+  "sigma_tau": 1.0,
+  "window": 2,
+  "lambda0": 1.0,
+  "beta": 0.5,
+  "proj_dim": 64,
+  "ablations_run": [
+    "sink_debiasing"
+  ],
+  "tasks": [
+    "Action Sequence"
+  ],
+  "n": 188,
+  "full_accuracy_mean": 0.7287234042553191,
+  "full_accuracy_micro": 0.7287234042553191,
+  "per_task_seen": {
+    "Action Sequence": 188
+  },
+  "skipped": [
+    {
+      "task": "Action Sequence",
+      "video": "EDXBD.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "K47J5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "9MNZ5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "QXT9W.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ABHC6.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "ALXUC.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "BAUQE.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "PHH6B.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "MNC10.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "W7CR5.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "Q8UJ8.mp4",
+      "reason": "missing file"
+    },
+    {
+      "task": "Action Sequence",
+      "video": "X9WTR.mp4",
+      "reason": "missing file"
+    }
+  ],
+  "results": {
+    "sink_debiasing": {
+      "raw": {
+        "L_star_mean": 6.292553191489362,
+        "L_star_histogram": {
+          "4": 73,
+          "5": 9,
+          "6": 1,
+          "8": 105
+        },
+        "per_rho": {
+          "0.01": {
+            "accuracy_mean": 0.35638297872340424,
+            "accuracy_micro": 0.35638297872340424,
+            "per_task": {
+              "Action Sequence": 0.35638297872340424
+            }
+          }
+        }
+      },
+      "value_norm": {
+        "L_star_mean": 5.292553191489362,
+        "L_star_histogram": {
+          "2": 3,
+          "3": 1,
+          "4": 64,
+          "5": 70,
+          "6": 10,
+          "8": 40
+        },
+        "per_rho": {
+          "0.01": {
+            "accuracy_mean": 0.3351063829787234,
+            "accuracy_micro": 0.3351063829787234,
+            "per_task": {
+              "Action Sequence": 0.3351063829787234
+            }
+          }
+        }
+      },
+      "contrastive_free": {
+        "L_star_mean": 5.292553191489362,
+        "L_star_histogram": {
+          "2": 3,
+          "3": 1,
+          "4": 64,
+          "5": 70,
+          "6": 10,
+          "8": 40
+        },
+        "per_rho": {
+          "0.01": {
+            "accuracy_mean": 0.3351063829787234,
+            "accuracy_micro": 0.3351063829787234,
+            "per_task": {
+              "Action Sequence": 0.3351063829787234
+            }
+          }
+        }
+      },
+      "pos_debias_seq": {
+        "L_star_mean": 5.611702127659575,
+        "L_star_histogram": {
+          "2": 1,
+          "3": 46,
+          "4": 3,
+          "5": 28,
+          "6": 43,
+          "7": 31,
+          "8": 36
+        },
+        "per_rho": {
+          "0.01": {
+            "accuracy_mean": 0.3191489361702128,
+            "accuracy_micro": 0.3191489361702128,
+            "per_task": {
+              "Action Sequence": 0.3191489361702128
+            }
+          }
+        }
+      },
+      "pos_debias_frame": {
+        "L_star_mean": 5.25531914893617,
+        "L_star_histogram": {
+          "3": 58,
+          "4": 4,
+          "5": 36,
+          "6": 34,
+          "7": 34,
+          "8": 22
+        },
+        "per_rho": {
+          "0.01": {
+            "accuracy_mean": 0.32978723404255317,
+            "accuracy_micro": 0.32978723404255317,
+            "per_task": {
+              "Action Sequence": 0.32978723404255317
+            }
+          }
+        }
+      }
+    }
+  }
+}

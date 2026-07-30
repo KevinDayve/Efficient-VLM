@@ -1,0 +1,168 @@
+{
+  "experiment": "mvbench_lcds",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+  "data_root": "/home/ubuntu/Experiments/MVBench",
+  "sampling": "official",
+  "num_frames": 16,
+  "fps": null,
+  "max_frames": 8,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "rhos": [
+    0.05,
+    0.1,
+    0.25
+  ],
+  "layer_stride": 4,
+  "select_layers": [
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32
+  ],
+  "feature_hs_idx": 36,
+  "cand_mult": 2.0,
+  "strategies": [
+    "uniform",
+    "attention_topk",
+    "lcds",
+    "lcds_dpp"
+  ],
+  "tasks": [
+    "Action Sequence",
+    "Scene Transition"
+  ],
+  "n": 80,
+  "full_accuracy_mean": 0.8,
+  "full_accuracy_micro": 0.8,
+  "per_task_seen": {
+    "Action Sequence": 40,
+    "Scene Transition": 40
+  },
+  "full_per_task": {
+    "Action Sequence": 0.775,
+    "Scene Transition": 0.825
+  },
+  "table": {
+    "uniform": {
+      "0.05": {
+        "accuracy_mean": 0.675,
+        "accuracy_micro": 0.675,
+        "dispersion": 0.516887105949606,
+        "per_task": {
+          "Action Sequence": 0.5,
+          "Scene Transition": 0.85
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7375,
+        "accuracy_micro": 0.7375,
+        "dispersion": 0.5006533623381448,
+        "per_task": {
+          "Action Sequence": 0.625,
+          "Scene Transition": 0.85
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.7625,
+        "accuracy_micro": 0.7625,
+        "dispersion": 0.49273945015126835,
+        "per_task": {
+          "Action Sequence": 0.725,
+          "Scene Transition": 0.8
+        }
+      }
+    },
+    "attention_topk": {
+      "0.05": {
+        "accuracy_mean": 0.825,
+        "accuracy_micro": 0.825,
+        "dispersion": 0.5020129178425087,
+        "per_task": {
+          "Action Sequence": 0.75,
+          "Scene Transition": 0.9
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7749999999999999,
+        "accuracy_micro": 0.775,
+        "dispersion": 0.5283417596700813,
+        "per_task": {
+          "Action Sequence": 0.7,
+          "Scene Transition": 0.85
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.775,
+        "accuracy_micro": 0.775,
+        "dispersion": 0.5164722425724182,
+        "per_task": {
+          "Action Sequence": 0.75,
+          "Scene Transition": 0.8
+        }
+      }
+    },
+    "lcds": {
+      "0.05": {
+        "accuracy_mean": 0.725,
+        "accuracy_micro": 0.725,
+        "dispersion": 0.5184394255012557,
+        "per_task": {
+          "Action Sequence": 0.6,
+          "Scene Transition": 0.85
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7,
+        "accuracy_micro": 0.7,
+        "dispersion": 0.5057950403944348,
+        "per_task": {
+          "Action Sequence": 0.575,
+          "Scene Transition": 0.825
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.7250000000000001,
+        "accuracy_micro": 0.725,
+        "dispersion": 0.4976748526311738,
+        "per_task": {
+          "Action Sequence": 0.65,
+          "Scene Transition": 0.8
+        }
+      }
+    },
+    "lcds_dpp": {
+      "0.05": {
+        "accuracy_mean": 0.8125,
+        "accuracy_micro": 0.8125,
+        "dispersion": 0.5194003381442214,
+        "per_task": {
+          "Action Sequence": 0.7,
+          "Scene Transition": 0.925
+        }
+      },
+      "0.1": {
+        "accuracy_mean": 0.7875,
+        "accuracy_micro": 0.7875,
+        "dispersion": 0.5264821720800896,
+        "per_task": {
+          "Action Sequence": 0.725,
+          "Scene Transition": 0.85
+        }
+      },
+      "0.25": {
+        "accuracy_mean": 0.8,
+        "accuracy_micro": 0.8,
+        "dispersion": 0.5172474839324762,
+        "per_task": {
+          "Action Sequence": 0.75,
+          "Scene Transition": 0.85
+        }
+      }
+    }
+  }
+}
