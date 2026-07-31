@@ -16,22 +16,21 @@ layer (top-k pruning has something to grab). gamma <= 0 => light/bounded tail =>
 importance is spread out, and selecting a small elite is not supported by the
 distribution.
 
-    --stack decoder    s^(l)_t = mean_q mean_h A^(l,h)_{q,t} * ||v^(l,h)_t||
+    --stack decoder    s^(l)_t = mean_q mean_h A^(l,h)_{q,t}
                        q = the TEXT query positions (--queries), t = visual tokens
                        in the LLM sequence (post-projector; for Qwen, post 2x2
                        merge). This is text->vision attention: how much answer-
                        bearing query mass each visual token draws.
 
-    --stack encoder    s^(l)_t = mean_q mean_h A^(l,h)_{q,t} * ||v^(l,h)_t||
+    --stack encoder    s^(l)_t = mean_q mean_h A^(l,h)_{q,t}
                        q = ALL patch positions. Neither ViT has a text signal, so
                        this is the "mean-incoming" variant: how much the rest of
                        the image attends to this patch. Scored on raw patches
                        (pre-merge, pre-projector) -- a different token population
                        from the decoder, so the two curves are NOT interchangeable.
 
---score attn drops the ||v|| factor on either stack. The value-norm is what makes
-the score "debiased": attention sinks receive huge A but carry almost no value
-mass, so multiplying by ||v|| demotes them without any threshold or detection.
+The score is raw attention mass, nothing else -- no value-norm reweighting, no sink
+handling, no positional correction.
 
 Backbones
 ---------
@@ -315,18 +314,10 @@ def context_limit(model):
     return getattr(cfg, "max_position_embeddings", None)
 
 
-def repeat_kv(v: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """(B, kv_heads, S, hd) -> (B, kv_heads*n_rep, S, hd), matching GQA broadcasting."""
-    if n_rep == 1:
-        return v
-    b, kv, s, hd = v.shape
-    return v[:, :, None].expand(b, kv, n_rep, s, hd).reshape(b, kv * n_rep, s, hd)
-
-
 # --------------------------------------------------------------------------- #
 # 4. Decoder capture: forward hooks on each self_attn (peak memory = ONE layer)
 # --------------------------------------------------------------------------- #
-def attach_decoder_capture(model, store: dict, ctx: dict, use_value_norm: bool):
+def attach_decoder_capture(model, store: dict, ctx: dict):
     """One forward hook per decoder layer's self_attn.
 
     Under eager the attention module returns its (1,H,Sq,Sk) weight tensor whether
@@ -337,7 +328,7 @@ def attach_decoder_capture(model, store: dict, ctx: dict, use_value_norm: bool):
     handles = []
 
     def make_hook(layer_idx):
-        def hook(module, args, kwargs, output):
+        def hook(module, inputs, output):
             if not isinstance(output, (tuple, list)) or len(output) < 2 or output[1] is None:
                 raise RuntimeError(
                     "self_attn returned no attention weights -- load the model with "
@@ -345,39 +336,24 @@ def attach_decoder_capture(model, store: dict, ctx: dict, use_value_norm: bool):
             # Slice the text-query rows BEFORE upcasting: the full (H,Sq,Sk) tensor is
             # hundreds of MB at these sequence lengths, and we only ever want a few rows.
             recv = output[1][0][:, ctx["text_q"], :].float().mean(dim=1)   # (H, Sk)
-
-            if use_value_norm:
-                # This module's input is already post-input_layernorm (the decoder layer
-                # normalizes before calling self_attn), so v_proj applies directly.
-                h = kwargs.get("hidden_states", args[0] if args else None)
-                v_flat = module.v_proj(h)                       # (1, S, kv_heads*hd)
-                hd = module.head_dim
-                v = v_flat.view(1, -1, v_flat.shape[-1] // hd, hd).transpose(1, 2)
-                v = repeat_kv(v, module.num_key_value_groups)   # GQA -> query heads
-                recv = recv * v[0].float().norm(dim=-1)         # (H, Sk)
-
             store[layer_idx] = [recv.mean(dim=0)[ctx["visual_idx"]].detach().cpu()]
-            return output
         return hook
 
     for i, layer in enumerate(text_model_of(model).layers):
-        handles.append(layer.self_attn.register_forward_hook(make_hook(i), with_kwargs=True))
+        handles.append(layer.self_attn.register_forward_hook(make_hook(i)))
     return lambda: [h.remove() for h in handles]
 
 
 # --------------------------------------------------------------------------- #
 # 5. Encoder capture: mean-incoming score, per backbone
 # --------------------------------------------------------------------------- #
-def _incoming_score(A, value, use_value_norm):
-    """(.., H, Sq, Sk) attention + (.., H, Sk, hd) values -> flat (Sk*,) scores:
-    mean over queries, value-norm weighted, mean over heads."""
+def _incoming_score(A):
+    """(.., H, Sq, Sk) attention -> flat (Sk*,) scores: mean over queries, then heads."""
     recv = A.float().mean(dim=-2)                            # (.., H, Sk)
-    if use_value_norm:
-        recv = recv * value.float().norm(dim=-1)             # (.., H, Sk)
     return recv.mean(dim=-2).flatten().detach().cpu()        # mean over heads
 
 
-def attach_encoder_capture(model, backbone, store: dict, use_value_norm: bool):
+def attach_encoder_capture(model, backbone, store: dict):
     """Layer -> [scores] for the vision tower. Returns an uninstall callable.
 
     The two towers need different mechanisms. CLIP's attention returns
@@ -392,27 +368,18 @@ def attach_encoder_capture(model, backbone, store: dict, use_value_norm: bool):
         handles = []
 
         def make_hook(layer_idx):
-            def hook(module, args, kwargs, output):
+            def hook(module, inputs, output):
                 if not isinstance(output, (tuple, list)) or len(output) < 2 or output[1] is None:
                     raise RuntimeError(
                         "CLIP attention returned no weights -- load with "
                         "attn_implementation='eager' (sdpa/flash never materialize them).")
-                A = output[1]                                # (N, H, S, S)
-                v = None
-                if use_value_norm:
-                    h = kwargs.get("hidden_states", args[0] if args else None)
-                    n, s, _ = h.shape
-                    v = module.v_proj(h).view(n, s, -1, module.head_dim).transpose(1, 2)
                 # Drop the CLS column: LLaVA feeds only the 576 patch tokens to the LM,
                 # so scoring CLS would put a token the decoder never sees in the tail.
-                score = _incoming_score(A[..., 1:], v[..., 1:, :] if v is not None else None,
-                                        use_value_norm)
-                store[layer_idx] = [score]
-                return output
+                store[layer_idx] = [_incoming_score(output[1][..., 1:])]   # (N,H,S,S)
             return hook
 
         for i, attn in enumerate(encoder_attn_modules(model, backbone)):
-            handles.append(attn.register_forward_hook(make_hook(i), with_kwargs=True))
+            handles.append(attn.register_forward_hook(make_hook(i)))
         return lambda: [h.remove() for h in handles]
 
     import transformers.models.qwen2_5_vl.modeling_qwen2_5_vl as m
@@ -423,8 +390,7 @@ def attach_encoder_capture(model, backbone, store: dict, use_value_norm: bool):
         out = orig(module, query, key, value, attention_mask, scaling, dropout, **kwargs)
         layer_idx = index_of.get(id(module))
         if layer_idx is not None:                # a vision block, not the text decoder
-            store.setdefault(layer_idx, []).append(
-                _incoming_score(out[1], value, use_value_norm))
+            store.setdefault(layer_idx, []).append(_incoming_score(out[1]))
         return out
 
     m.eager_attention_forward = wrapped
@@ -531,12 +497,10 @@ def main(args):
     store, ctx = {}, {}
     if args.stack == "encoder":
         n_layers = len(encoder_attn_modules(model, args.backbone))
-        uninstall = attach_encoder_capture(model, args.backbone, store,
-                                           use_value_norm=(args.score == "debiased"))
+        uninstall = attach_encoder_capture(model, args.backbone, store)
     else:
         n_layers = len(text_model_of(model).layers)
-        uninstall = attach_decoder_capture(model, store, ctx,
-                                           use_value_norm=(args.score == "debiased"))
+        uninstall = attach_decoder_capture(model, store, ctx)
     print(f"[model] {n_layers} {args.stack} layers, {max_positions} LM positions")
     print(f"[data] tasks={args.tasks}  {args.num_segments} frames/clip")
 
@@ -575,9 +539,6 @@ def main(args):
 
     G = np.array(curves, dtype=float)                       # (n_clips, n_layers)
     mean, std = np.nanmean(G, axis=0), np.nanstd(G, axis=0)
-    valid = np.where(np.isfinite(mean))[0]
-    L_star = int(valid[np.argmax(mean[valid])]) if valid.size else None
-    per_clip_lstar = [int(np.nanargmax(g)) for g in G if np.isfinite(g).any()]
 
     tasks_arr = np.array(tasks_seen)
     per_task = {t: {int(l): float(v) for l, v in
@@ -587,7 +548,7 @@ def main(args):
     out = {"experiment": "tail_vs_layer", "stack": args.stack, "backbone": args.backbone,
            "model_name": args.model_name, "data_root": args.data_root, "tasks": args.tasks,
            "num_segments": args.num_segments, "max_pixels": args.max_pixels,
-           "min_pixels": args.min_pixels, "score": args.score,
+           "min_pixels": args.min_pixels, "score": "attention",
            "queries": args.queries if args.stack == "decoder" else "all-patches",
            "estimator": args.estimator, "k_frac": args.k_frac,
            "n_clips": len(curves), "n_layers": n_layers,
@@ -595,35 +556,23 @@ def main(args):
            "gamma_mean_by_layer": {int(l): float(mean[l]) for l in range(n_layers)},
            "gamma_std_by_layer": {int(l): float(std[l]) for l in range(n_layers)},
            "gamma_mean_by_task": per_task,
-           "L_star_pooled": L_star,
-           "L_star_histogram": {int(l): per_clip_lstar.count(l) for l in sorted(set(per_clip_lstar))},
            "skipped": skipped}
 
     print(f"\n==== {args.stack} tail index vs. layer ({len(curves)} clips) ====")
     print(f"{args.backbone}: {args.model_name}, {args.num_segments} frames, "
           f"{len(set(tasks_seen))} task(s)")
-    print(f"score={args.score}  estimator={args.estimator}  k_frac={args.k_frac}"
+    print(f"estimator={args.estimator}  k_frac={args.k_frac}"
           + (f"  queries={args.queries}" if args.stack == "decoder" else ""))
     lo, hi = float(np.nanmin(mean)), float(np.nanmax(mean))
     for l in range(n_layers):
-        mark = "  <- L*" if l == L_star else ""
         if not np.isfinite(mean[l]):                 # a layer with too few positive scores
-            print(f"  layer {l:>3}: gamma = NaN{mark}")
+            print(f"  layer {l:>3}: gamma = NaN")
             continue
         bar = "#" * int(round(40 * (mean[l] - lo) / max(1e-9, hi - lo)))
-        print(f"  layer {l:>3}: gamma = {mean[l]:+.4f} +/- {std[l]:.4f}  {bar}{mark}")
-    if L_star is None:
-        print("\nno layer produced a usable tail-index estimate.")
-    else:
-        print(f"\nheaviest-tailed layer pooled over clips: L* = {L_star} (gamma = {mean[L_star]:+.4f})")
-    print(f"per-clip L* histogram: {out['L_star_histogram']}")
+        print(f"  layer {l:>3}: gamma = {mean[l]:+.4f} +/- {std[l]:.4f}  {bar}")
     if len(per_task) > 1:
-        print("\nper-task L*:")
-        for t, curve in per_task.items():
-            finite = {l: g for l, g in curve.items() if np.isfinite(g)}
-            best = max(finite, key=finite.get) if finite else None
-            print(f"  {t:<28} n={out['per_task_seen'][t]:<5} L*={best}"
-                  + (f"  gamma={finite[best]:+.4f}" if best is not None else ""))
+        print("\nper-task clip counts: "
+              + ", ".join(f"{t} ({out['per_task_seen'][t]})" for t in per_task))
     if skipped:
         print(f"\nskipped {len(skipped)} clip(s)")
 
@@ -645,12 +594,10 @@ def main(args):
         plt.plot(xs, mean, marker="o", ms=3, color="#1f77b4", label="mean gamma")
         plt.fill_between(xs, mean - std, mean + std, color="#1f77b4", alpha=0.15, label="+/- 1 sd")
         plt.axhline(0.0, color="gray", lw=0.8, ls=":")
-        if L_star is not None:
-            plt.axvline(L_star, color="crimson", ls="--", lw=1, label=f"L* = {L_star}")
         plt.xlabel(f"{args.stack} layer")
         plt.ylabel("tail index gamma")
         plt.title(f"{os.path.basename(args.model_name)} {args.stack} "
-                  f"({len(curves)} clips, {args.num_segments}f, {args.score})")
+                  f"({len(curves)} clips, {args.num_segments}f)")
         plt.legend(frameon=False)
         plt.tight_layout()
         plt.savefig(args.plot, dpi=150)
@@ -680,8 +627,6 @@ def parse_args():
                    help="qwen only: floor on per-frame pixels. Defaults to --max_pixels, which "
                         "pins every frame to exactly that size (constant tokens/frame); 0 opts out.")
     p.add_argument("--max_samples", type=int, default=None, help="cap on records PER TASK.")
-    p.add_argument("--score", choices=["debiased", "attn"], default="debiased",
-                   help="debiased = attention x value-norm (demotes sinks); attn = raw attention.")
     p.add_argument("--queries", choices=["post", "all", "last"], default="post",
                    help="decoder only: text query rows averaged over. post = non-visual positions "
                         "after the visual block, all = every non-visual position, last = the "
