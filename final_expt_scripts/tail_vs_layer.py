@@ -1,6 +1,7 @@
 """
 tail_vs_layer.py -- tail index (gamma) of visual-token importance vs. layer, for
-Qwen2.5-VL or LLaVA-1.5, on EgoSchema or MVBench, on the DECODER or the ENCODER.
+Qwen2.5-VL or LLaVA-OneVision, on EgoSchema or MVBench, on the DECODER or the
+ENCODER.
 
 Standalone by design: nothing here imports from the rest of the repo. Frame
 sampling, prompt building, the importance score and the EVT estimator are all
@@ -23,10 +24,10 @@ distribution.
                        bearing query mass each visual token draws.
 
     --stack encoder    s^(l)_t = mean_q mean_h A^(l,h)_{q,t}
-                       q = ALL patch positions. Neither ViT has a text signal, so
+                       q = ALL patch positions. No ViT here has a text signal, so
                        this is the "mean-incoming" variant: how much the rest of
                        the image attends to this patch. Scored on raw patches
-                       (pre-merge, pre-projector) -- a different token population
+                       (pre-pool, pre-projector) -- a different token population
                        from the decoder, so the two curves are NOT interchangeable.
 
 The score is raw attention mass, nothing else -- no value-norm reweighting, no sink
@@ -36,14 +37,22 @@ Backbones
 ---------
 Inferred from --model_name.
 
-    qwen   Qwen/Qwen2.5-VL-{3B,7B}-Instruct -- native video. --max_pixels sets
-           tokens/frame; 16 frames at 200704 px is 2048 decoder visual tokens.
-    llava  llava-hf/llava-1.5-7b-hf -- an IMAGE model, so frames go in as N
-           separate <image> placeholders. Every frame costs exactly 576 tokens
-           (336x336 CLIP grid; --max_pixels/--min_pixels do NOTHING here) and the
-           LM tops out at 4096 positions, so only ~6 frames fit. It was never
-           trained on multi-image input; treat its decoder curve as "what does a
-           single-image model do when handed a filmstrip", not a video baseline.
+    qwen      Qwen/Qwen2.5-VL-{3B,7B}-Instruct -- native video. --max_pixels sets
+              tokens/frame; 16 frames at 200704 px is 2048 decoder visual tokens.
+    llava_ov  llava-hf/llava-onevision-qwen2-{0.5b,7b}-ov-hf -- a native VIDEO
+              model (SigLIP-so400m tower + Qwen2 LM), so the whole clip goes in as
+              a single <video> placeholder. Each frame is 384x384 -> 729 SigLIP
+              patches, 2x2-pooled to 196 decoder tokens (+1 newline for the clip),
+              so 16 frames is 3137 visual tokens against a 32k-position LM.
+              --max_pixels/--min_pixels do NOTHING here (the frame size is fixed).
+              The encoder is scored on the 729 raw patches per frame, the decoder
+              on the 196 pooled ones -- same pre-/post-pool split as Qwen.
+    llava     llava-hf/llava-1.5-7b-hf -- kept for the older image-model runs. An
+              IMAGE model, so frames go in as N separate <image> placeholders, each
+              costing exactly 576 tokens (336x336 CLIP grid), against a 4096-position
+              LM, so only ~6 frames fit. It was never trained on multi-image input;
+              treat its decoder curve as "what does a single-image model do when
+              handed a filmstrip", not a video baseline. Prefer llava_ov.
 
 Data layout
 -----------
@@ -66,11 +75,16 @@ Run
         --num_segments 16 --max_pixels 200704 --max_samples 100 \
         --out tail_enc_ego_qwen.json
 
-    # MVBench, a few tasks, LLaVA-1.5
+    # decoder, LLaVA-OneVision, EgoSchema
+    python tail_vs_layer.py --data_root ~/Experiments/EgoSchema --tasks EgoSchema \
+        --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
+        --max_samples 100 --out tail_dec_ego_llavaov.json
+
+    # MVBench, a few tasks, LLaVA-OneVision
     python tail_vs_layer.py --data_root ~/Experiments/MVBench \
         --tasks "Action Sequence" "Scene Transition" \
-        --model_name llava-hf/llava-1.5-7b-hf --num_segments 6 \
-        --max_samples 40 --out tail_dec_mvb_llava.json
+        --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
+        --max_samples 40 --out tail_dec_mvb_llavaov.json
 """
 from __future__ import annotations
 
@@ -96,12 +110,29 @@ SYSTEM_PROMPT = (
 ANSWER_PREFIX = "Best option:("
 
 # LLaVA-1.5's v1 conversation template, hardcoded rather than taken from the hub's
-# chat_template so the prompt cannot drift between checkpoint revisions.
+# chat_template so the prompt cannot drift between checkpoint revisions. OneVision is
+# NOT built this way -- it uses the checkpoint's own chatml template (see build_inputs).
 LLAVA_TEMPLATE = "USER: {images}{question} ASSISTANT: "
 
-# Per-backbone frame default: Qwen decodes video natively, LLaVA-1.5 spends 576 tokens
-# per frame against a 4096-position LM, so 6 frames (3456 tokens) is the practical cap.
-DEFAULT_SEGMENTS = {"qwen": 16, "llava": 6}
+# Per-backbone frame default. Qwen and OneVision both decode video natively and are held
+# at 16 so their curves are comparable clip-for-clip (OneVision at 196 tokens/frame has
+# room for far more; 32 still fits its 32k LM easily). LLaVA-1.5 spends 576 tokens per
+# frame against a 4096-position LM, so 6 frames (3456 tokens) is its practical cap.
+DEFAULT_SEGMENTS = {"qwen": 16, "llava_ov": 16, "llava": 6}
+
+# The two LLaVA checkpoints share the HF Llava* wrapper layout (vision_tower +
+# language_model, no pixel budget) but not their vision tower, video handling or LM.
+LLAVA_FAMILY = ("llava", "llava_ov")
+
+
+def infer_backbone(model_name: str) -> str:
+    """--model_name -> backbone key. OneVision checkpoints are named
+    llava-onevision-qwen2-*-ov-hf, so they carry BOTH 'llava' and 'qwen' -- the
+    onevision marker has to be tested first."""
+    name = model_name.lower()
+    if "onevision" in name or "-ov-" in name or name.endswith("-ov"):
+        return "llava_ov"
+    return "llava" if "llava" in name else "qwen"
 
 # task -> (json file, video subdir under <data_root>/video, data_type, has_temporal_bound)
 DATA_LIST = {
@@ -227,6 +258,18 @@ def build_inputs(processor, frames, record, args, device, dtype):
         # No pixel budget exists here -- LLaVA-1.5 always resizes to 336x336.
         prompt = LLAVA_TEMPLATE.format(images="<image>\n" * len(frames), question=question)
         inputs = processor(text=[prompt + ANSWER_PREFIX], images=frames, return_tensors="pt")
+    elif args.backbone == "llava_ov":
+        # One <video> placeholder for the WHOLE clip -- the processor expands it to
+        # 196 tokens/frame + 1 newline. Unlike LLaVA-1.5 the template is taken from the
+        # checkpoint (chatml, via Qwen2): OneVision was tuned with it, and hardcoding a
+        # v1-style prompt here would put the model off-distribution.
+        messages = [{"role": "user",
+                     "content": [{"type": "video"}, {"type": "text", "text": question}]}]
+        chat = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # Frames stacked into one (T,H,W,C) array = one video; a bare list of frames is
+        # ambiguous with a batch of images in the video processor's input normaliser.
+        video = np.stack([np.asarray(f.convert("RGB")) for f in frames])
+        inputs = processor(text=[chat + ANSWER_PREFIX], videos=[video], return_tensors="pt")
     else:
         from qwen_vl_utils import process_vision_info
         vid = {"type": "video", "video": frames}
@@ -268,6 +311,9 @@ def load_model(args, dtype):
     if args.backbone == "llava":
         from transformers import LlavaForConditionalGeneration as ModelCls
         visual_token = "<image>"
+    elif args.backbone == "llava_ov":
+        from transformers import LlavaOnevisionForConditionalGeneration as ModelCls
+        visual_token = "<video>"           # the clip is one placeholder, not one per frame
     else:
         from transformers import Qwen2_5_VLForConditionalGeneration as ModelCls
         visual_token = "<|video_pad|>"
@@ -281,10 +327,12 @@ def load_model(args, dtype):
 
 
 def text_model_of(model):
-    """The decoder stack. Both wrappers nest it identically: <Model>ForConditional
-    Generation.model.language_model (Qwen2_5_VLTextModel / LlamaModel)."""
+    """The decoder stack. All three wrappers nest it identically: <Model>ForConditional
+    Generation.model.language_model (Qwen2_5_VLTextModel / LlamaModel / Qwen2Model)."""
     base = model.model if hasattr(model, "model") and hasattr(model.model, "language_model") else model
-    return base.language_model
+    lm = base.language_model
+    # Older layouts hand back the ForCausalLM wrapper rather than the bare stack.
+    return lm if hasattr(lm, "layers") else lm.model
 
 
 def vision_tower_of(model):
@@ -299,9 +347,10 @@ def vision_tower_of(model):
 def encoder_attn_modules(model, backbone):
     """The vision tower's per-layer attention modules, in depth order."""
     tower = vision_tower_of(model)
-    if backbone == "llava":
-        # Newer transformers puts .encoder straight on CLIPVisionModel; older versions
-        # nest a CLIPVisionTransformer under .vision_model first.
+    if backbone in LLAVA_FAMILY:
+        # CLIP (1.5) and SigLIP (OneVision) share this layout; SigLIP's attention-pooling
+        # head sits outside .encoder.layers and is deliberately not captured -- it is not
+        # a layer of the stack and LLaVA reads hidden states, not the pooled output.
         tower = getattr(tower, "vision_model", tower)
         return [layer.self_attn for layer in tower.encoder.layers]
     return [block.attn for block in tower.blocks]
@@ -348,15 +397,19 @@ def attach_decoder_capture(model, store: dict, ctx: dict):
 # 5. Encoder capture: mean-incoming score, per backbone
 # --------------------------------------------------------------------------- #
 def _incoming_score(A):
-    """(.., H, Sq, Sk) attention -> flat (Sk*,) scores: mean over queries, then heads."""
-    recv = A.float().mean(dim=-2)                            # (.., H, Sk)
+    """(.., H, Sq, Sk) attention -> flat (Sk*,) scores: mean over queries, then heads.
+
+    Accumulating in fp32 via dtype= instead of .float()-ing A first: at OneVision's
+    16 frames x 729 patches x 16 heads the full upcast is over a GB per layer, and
+    only the reduced tensor is ever needed."""
+    recv = A.mean(dim=-2, dtype=torch.float32)               # (.., H, Sk)
     return recv.mean(dim=-2).flatten().detach().cpu()        # mean over heads
 
 
 def attach_encoder_capture(model, backbone, store: dict):
     """Layer -> [scores] for the vision tower. Returns an uninstall callable.
 
-    The two towers need different mechanisms. CLIP's attention returns
+    The towers need different mechanisms. CLIP's and SigLIP's attention return
     (attn_output, attn_weights) like the decoder's, so a plain forward hook works.
     Qwen2_5_VLVisionAttention does NOT: its forward keeps only attn_output and
     discards the weights, so the sole place they exist is the shared module-level
@@ -364,18 +417,20 @@ def attach_encoder_capture(model, backbone, store: dict):
     instance filter. It is called once per cu_seqlens chunk (each window, or each
     frame-group on full-attention layers), so scores are pooled across chunks;
     gamma is permutation-invariant over tokens, so chunk order never matters."""
-    if backbone == "llava":
+    if backbone in LLAVA_FAMILY:
         handles = []
+        # CLIP prepends a CLS token that LLaVA-1.5 never forwards to the LM, so its column
+        # is dropped -- scoring it would put a token the decoder never sees in the tail.
+        # SigLIP has no CLS at all (num_positions == num_patches), so nothing is dropped.
+        first_patch = 1 if backbone == "llava" else 0
 
         def make_hook(layer_idx):
             def hook(module, inputs, output):
                 if not isinstance(output, (tuple, list)) or len(output) < 2 or output[1] is None:
                     raise RuntimeError(
-                        "CLIP attention returned no weights -- load with "
+                        "vision attention returned no weights -- load with "
                         "attn_implementation='eager' (sdpa/flash never materialize them).")
-                # Drop the CLS column: LLaVA feeds only the 576 patch tokens to the LM,
-                # so scoring CLS would put a token the decoder never sees in the tail.
-                store[layer_idx] = [_incoming_score(output[1][..., 1:])]   # (N,H,S,S)
+                store[layer_idx] = [_incoming_score(output[1][..., first_patch:])]  # (N,H,S,S)
             return hook
 
         for i, attn in enumerate(encoder_attn_modules(model, backbone)):
@@ -429,6 +484,12 @@ def gammas_for_clip(model, inputs, visual_token_id, args, store, ctx, n_layers, 
         # it avoids an O(S^2) eager decoder pass per clip.
         if args.backbone == "llava":
             vision_tower_of(model)(inputs["pixel_values"])
+        elif args.backbone == "llava_ov":
+            # (1,F,3,384,384) -> (F,3,384,384): SigLIP runs per frame, so the clip's
+            # frames are simply its batch. Called directly rather than through
+            # get_video_features to skip the projector and the 2x2 pooling, neither of
+            # which the encoder score uses.
+            vision_tower_of(model)(inputs["pixel_values_videos"].flatten(0, 1))
         else:
             model.get_video_features(inputs["pixel_values_videos"], inputs["video_grid_thw"])
     else:
@@ -458,7 +519,7 @@ def gammas_for_clip(model, inputs, visual_token_id, args, store, ctx, n_layers, 
 # --------------------------------------------------------------------------- #
 def main(args):
     if args.backbone == "auto":
-        args.backbone = "llava" if "llava" in args.model_name.lower() else "qwen"
+        args.backbone = infer_backbone(args.model_name)
     if args.num_segments is None:
         args.num_segments = DEFAULT_SEGMENTS[args.backbone]
 
@@ -477,11 +538,14 @@ def main(args):
     model, processor, visual_token_id = load_model(args, dtype)
     max_positions = context_limit(model)
 
-    if args.backbone == "llava":
-        # 576 tokens per frame is fixed by the 336x336 CLIP grid, so the pixel knobs are
-        # inert here -- say so rather than let them look like they took effect.
+    if args.backbone in LLAVA_FAMILY:
+        # Both LLaVA towers resize to a fixed grid (336x336 -> 576 tokens/frame on 1.5,
+        # 384x384 -> 729 patches pooled to 196 on OneVision), so the pixel knobs are inert
+        # here -- say so rather than let them look like they took effect.
         if args.max_pixels is not None or args.min_pixels is not None:
-            print("[warn] --max_pixels/--min_pixels are ignored on llava (fixed 576 tokens/frame).")
+            fixed = "576" if args.backbone == "llava" else "196"
+            print(f"[warn] --max_pixels/--min_pixels are ignored on {args.backbone} "
+                  f"(fixed {fixed} decoder tokens/frame).")
         args.max_pixels = args.min_pixels = None
     else:
         # Pin the frame resolution: with min_pixels left at the qwen_vl_utils default, only
@@ -612,8 +676,9 @@ def parse_args():
                    help="task names, or 'mvbench' (all 20 MVBench tasks) / 'all' (+ EgoSchema). "
                         "MVBench and EgoSchema live under different roots -- don't mix in one run.")
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-7B-Instruct")
-    p.add_argument("--backbone", choices=["auto", "qwen", "llava"], default="auto",
-                   help="auto infers from --model_name ('llava' in the name -> llava).")
+    p.add_argument("--backbone", choices=["auto", "qwen", "llava_ov", "llava"], default="auto",
+                   help="auto infers from --model_name (onevision/-ov- -> llava_ov, else "
+                        "'llava' -> llava-1.5, else qwen).")
     p.add_argument("--stack", choices=["decoder", "encoder"], default="decoder",
                    help="decoder = text->vision attention in the LLM; encoder = mean-incoming "
                         "patch attention in the vision tower. Different token populations; the "
@@ -621,8 +686,8 @@ def parse_args():
     p.add_argument("--num_segments", type=int, default=None,
                    help=f"frames sampled per clip. Default per backbone: {DEFAULT_SEGMENTS}.")
     p.add_argument("--max_pixels", type=int, default=None,
-                   help="qwen only: per-frame pixel cap, e.g. 200704. LLaVA-1.5 is fixed at "
-                        "576 tokens/frame and ignores this.")
+                   help="qwen only: per-frame pixel cap, e.g. 200704. Both LLaVA backbones "
+                        "have a fixed frame size and ignore this.")
     p.add_argument("--min_pixels", type=int, default=None,
                    help="qwen only: floor on per-frame pixels. Defaults to --max_pixels, which "
                         "pins every frame to exactly that size (constant tokens/frame); 0 opts out.")

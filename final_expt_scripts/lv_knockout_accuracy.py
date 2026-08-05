@@ -1,11 +1,12 @@
 """
 lv_knockout_accuracy.py -- accuracy under text->vision attention knockout, for
-Qwen2.5-VL or LLaVA-1.5, on EgoSchema or MVBench.
+Qwen2.5-VL or LLaVA-OneVision, on EgoSchema or MVBench.
 
 This is the Language-to-Video Knockout (LV-K) probe of "An Empirical Study on How
-Video-LLMs Answer Video Questions" (arXiv 2508.15360), run on OUR two backbones
-and OUR two benchmarks -- the paper only reports LongVA, InternVideo2.5,
-LLaVA-OneVision and LLaVA-Video.
+Video-LLMs Answer Video Questions" (arXiv 2508.15360), run on OUR backbones and OUR
+two benchmarks -- the paper reports LongVA, InternVideo2.5, LLaVA-OneVision and
+LLaVA-Video, so the LLaVA-OneVision runs here overlap with it (same model, our
+prompt/scoring protocol and our clips) while Qwen2.5-VL is new.
 
 What is knocked out
 -------------------
@@ -83,10 +84,10 @@ Run
         --model_name Qwen/Qwen2.5-VL-7B-Instruct --num_segments 16 --max_pixels 200704 \
         --out lvk_ego_qwen.json
 
-    # LLaVA-1.5, MVBench, 4-layer window (fig. 6)
+    # LLaVA-OneVision, MVBench, 4-layer window (fig. 6)
     python lv_knockout_accuracy.py --data_root ~/Experiments/MVBench --tasks mvbench \
-        --model_name llava-hf/llava-1.5-7b-hf --num_segments 6 --max_samples 50 \
-        --setting window --window 4 --out lvk_win_mvb_llava.json
+        --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
+        --max_samples 50 --setting window --window 4 --out lvk_win_mvb_llavaov.json
 """
 from __future__ import annotations
 
@@ -99,9 +100,9 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from tail_vs_layer import (ANSWER_PREFIX, DATA_LIST, DEFAULT_SEGMENTS, MVBENCH_TASKS,
-                           build_inputs, context_limit, iter_clips, sample_frames,
-                           text_model_of)
+from tail_vs_layer import (ANSWER_PREFIX, DATA_LIST, DEFAULT_SEGMENTS, LLAVA_FAMILY,
+                           MVBENCH_TASKS, build_inputs, context_limit, infer_backbone,
+                           iter_clips, sample_frames, text_model_of)
 
 warnings.filterwarnings("ignore", message=".*video decoding and encoding capabilities of torchvision.*")
 
@@ -120,6 +121,9 @@ def load_model(args, dtype):
     if args.backbone == "llava":
         from transformers import LlavaForConditionalGeneration as ModelCls
         visual_token = "<image>"
+    elif args.backbone == "llava_ov":
+        from transformers import LlavaOnevisionForConditionalGeneration as ModelCls
+        visual_token = "<video>"           # the clip is one placeholder, not one per frame
     else:
         from transformers import Qwen2_5_VLForConditionalGeneration as ModelCls
         visual_token = "<|video_pad|>"
@@ -249,7 +253,7 @@ def gold_index(record) -> int:
 # --------------------------------------------------------------------------- #
 def main(args):
     if args.backbone == "auto":
-        args.backbone = "llava" if "llava" in args.model_name.lower() else "qwen"
+        args.backbone = infer_backbone(args.model_name)
     if args.num_segments is None:
         args.num_segments = DEFAULT_SEGMENTS[args.backbone]
     if args.window_step is None:
@@ -271,12 +275,14 @@ def main(args):
     max_positions = context_limit(model)
     n_layers = len(text_model_of(model).layers)
 
-    # Same pixel-budget handling as tail_vs_layer.py: LLaVA-1.5 is fixed at 576
-    # tokens/frame, and on Qwen min_pixels defaults to max_pixels so every frame
-    # costs the same number of tokens.
-    if args.backbone == "llava":
+    # Same pixel-budget handling as tail_vs_layer.py: both LLaVA towers have a fixed
+    # frame size (576 tokens/frame on 1.5, 196 on OneVision), and on Qwen min_pixels
+    # defaults to max_pixels so every frame costs the same number of tokens.
+    if args.backbone in LLAVA_FAMILY:
         if args.max_pixels is not None or args.min_pixels is not None:
-            print("[warn] --max_pixels/--min_pixels are ignored on llava (fixed 576 tokens/frame).")
+            fixed = "576" if args.backbone == "llava" else "196"
+            print(f"[warn] --max_pixels/--min_pixels are ignored on {args.backbone} "
+                  f"(fixed {fixed} decoder tokens/frame).")
         args.max_pixels = args.min_pixels = None
     else:
         if args.min_pixels is None:
@@ -453,8 +459,9 @@ def parse_args():
                    help="task names, or 'mvbench' (all 20 MVBench tasks) / 'all' (+ EgoSchema). "
                         "MVBench and EgoSchema live under different roots -- don't mix in one run.")
     p.add_argument("--model_name", default="Qwen/Qwen2.5-VL-7B-Instruct")
-    p.add_argument("--backbone", choices=["auto", "qwen", "llava"], default="auto",
-                   help="auto infers from --model_name ('llava' in the name -> llava).")
+    p.add_argument("--backbone", choices=["auto", "qwen", "llava_ov", "llava"], default="auto",
+                   help="auto infers from --model_name (onevision/-ov- -> llava_ov, else "
+                        "'llava' -> llava-1.5, else qwen).")
     p.add_argument("--setting", choices=["cumulative", "window"], default="cumulative",
                    help="cumulative: knock out every layer beyond a cutoff and sweep the cutoff "
                         "(paper's Global Setting 1, fig. 3). window: knock out --window "
@@ -471,8 +478,8 @@ def parse_args():
     p.add_argument("--num_segments", type=int, default=None,
                    help=f"frames sampled per clip. Default per backbone: {DEFAULT_SEGMENTS}.")
     p.add_argument("--max_pixels", type=int, default=None,
-                   help="qwen only: per-frame pixel cap, e.g. 200704. LLaVA-1.5 is fixed at "
-                        "576 tokens/frame and ignores this.")
+                   help="qwen only: per-frame pixel cap, e.g. 200704. Both LLaVA backbones "
+                        "have a fixed frame size and ignore this.")
     p.add_argument("--min_pixels", type=int, default=None,
                    help="qwen only: floor on per-frame pixels. Defaults to --max_pixels; 0 opts out.")
     p.add_argument("--max_samples", type=int, default=None, help="cap on records PER TASK.")
