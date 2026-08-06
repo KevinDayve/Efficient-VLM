@@ -384,8 +384,11 @@ def attach_decoder_capture(model, store: dict, ctx: dict):
                     "attn_implementation='eager' (sdpa/flash never materialize them).")
             # Slice the text-query rows BEFORE upcasting: the full (H,Sq,Sk) tensor is
             # hundreds of MB at these sequence lengths, and we only ever want a few rows.
-            recv = output[1][0][:, ctx["text_q"], :].float().mean(dim=1)   # (H, Sk)
-            store[layer_idx] = [recv.mean(dim=0)[ctx["visual_idx"]].detach().cpu()]
+            # Both index tensors follow the tensor they index: under device_map="auto"
+            # this layer's output can sit on a different GPU than the input_ids.
+            attn = output[1][0]
+            recv = attn[:, ctx["text_q"].to(attn.device), :].float().mean(dim=1)   # (H, Sk)
+            store[layer_idx] = [recv.mean(dim=0)[ctx["visual_idx"].to(recv.device)].detach().cpu()]
         return hook
 
     for i, layer in enumerate(text_model_of(model).layers):

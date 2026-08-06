@@ -220,8 +220,13 @@ def attach_capture(model, store: dict, ctx: dict):
                 raise RuntimeError(
                     "self_attn returned no attention weights -- load the model with "
                     "attn_implementation='eager' (sdpa/flash never materialize them).")
-            recv = output[1][0][:, ctx["text_q"], :].float().mean(dim=1)      # (H, Sk)
-            store[layer_idx] = recv.mean(dim=0)[ctx["visual_idx"]].detach().cpu()
+            # Under device_map="auto" this layer's weights (and so `output`) may live on
+            # a different GPU than the input_ids the indices were built from, so both
+            # index tensors follow the tensor they index.
+            attn = output[1][0]
+            text_q = ctx["text_q"].to(attn.device)
+            recv = attn[:, text_q, :].float().mean(dim=1)                     # (H, Sk)
+            store[layer_idx] = recv.mean(dim=0)[ctx["visual_idx"].to(recv.device)].detach().cpu()
         return hook
 
     handles.append(text_model.register_forward_pre_hook(stack_pre, with_kwargs=True))
