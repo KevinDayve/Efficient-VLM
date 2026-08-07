@@ -119,7 +119,7 @@ STAGE_DEFAULTS = {"early": ("0:6", "heaviest"),
                   "mid": ("11:15", "mean"),
                   "late": ("-5:-1", "mean")}
 DEFAULT_SELECTORS = ["attn_early", "attn_mid", "attn_late", "random", "uniform"]
-BASELINE_SELECTORS = ["random", "uniform"]
+BASELINE_SELECTORS = ["random", "uniform", "uniform_stagger"]  # This list is moot anyway because `is_baseline` is used to check for baseline selectors. Retained for the sake of posterity.
 
 
 # --------------------------------------------------------------------------- #
@@ -132,12 +132,19 @@ def _layer_index(tok: str, n_layers: int) -> int:
         raise ValueError(f"layer {tok} is outside a {n_layers}-layer stack")
     return i
 
+def is_baseline(s):
+    return s.startswith("random") or s in ("uniform", "uniform_stagger")
+
 
 def parse_band(spec: str, n_layers: int) -> list[int]:
-    """'11:15' / '11-15' / '7' / '-5:-1' / '0:3,8' -> sorted 0-indexed layers, inclusive.
-
-    ':' is the range separator that also accepts negative endpoints ('-5:-1' = the last
-    five layers); 'a-b' is accepted for non-negative endpoints because it reads better."""
+    """
+    A band is a comma-separated list of layer ranges, each of which is either a single layer or a colon or hyphen separated pair of layer indices.
+    Args:
+        spec (str): The band specification string i,e (11-15, 20:25, -5:-1 etc)
+        n_layers (int): The total number of decoder layers in the model.
+    Returns:
+        list[int]: A sorted list of unique layer indices (inclusive) i.e., (11-15) -> [11, 12, 13, 14, 15]
+    """
     layers: set[int] = set()
     for part in str(spec).split(","):
         part = part.strip()
@@ -164,10 +171,17 @@ def parse_band(spec: str, n_layers: int) -> list[int]:
 # 2. Capture: attention scores, merged embeddings, position ids -- one forward
 # --------------------------------------------------------------------------- #
 def _bound_arg(module, args, kwargs, name):
-    """The value of `name` in a call, whether it arrived as a kwarg or positionally.
-
-    transformers moves arguments between the two across versions, so the position of
-    `position_ids` in the decoder's signature is read at runtime rather than assumed."""
+    """
+    A helper function that abstracts how to retrieve the value of a named argument from a module's forward method.
+    Example: passing "positional_ids" will retrieve the actual tensor, irrespective of how it was passed in the model's forward (either as a positional or keyword argument).
+    Args:
+        module: The module whose forward method is being inspected.
+        args: The positional arguments passed to the forward method.
+        kwargs: The keyword arguments passed to the forward method.
+        name: Name of the argument to retrieve.
+    Returns:
+        The value of the named argument if found, otherwise None.
+    """
     if name in kwargs:
         return kwargs[name]
     try:
@@ -198,21 +212,32 @@ def attach_capture(model, store: dict, ctx: dict):
                                  exactly what the pruned forwards need to slice.
         decoder pre-hook         the position ids the model built for this clip (3D
                                  mRoPE on Qwen, 1D on LLaVA)."""
+    # Gets the language or decoder tower, which is where the attention lives.
     text_model = text_model_of(model)
     handles = []
 
     def stack_pre(module, args, kwargs):
+        """
+        This is the hook to capture the positional IDs
+        """
         if ctx.get("capture"):
+            # The position ids are needed for the pruned forwards, we use `_bound_arg` to get the values of the named parameter from the forward call.
             ctx["position_ids"] = _bound_arg(module, args, kwargs, "position_ids")
         return None
 
     def embed_pre(module, args, kwargs):
+        """
+        A hook to capture the merged input embeddings (visual features are already scattered into their placeholder positions).
+        """
         if ctx.get("capture"):
             h = kwargs.get("hidden_states")
             ctx["embeds"] = (args[0] if h is None else h).detach()
         return None
 
     def make_attn_hook(layer_idx):
+        """
+        This is a pytorch hook to capture the attention scores from the self-attention layer of the model.
+        """
         def hook(module, inputs, output):
             if not ctx.get("capture"):
                 return None
@@ -255,7 +280,34 @@ def stage_score(store: dict, band: list[int], agg: str, k_frac: float):
     return normed.mean(dim=0), None, None
 
 
-def keep_local(selector: str, scores, M: int, K: int, rng) -> np.ndarray:
+def uniform_stagger(M: int, K: int, F: int) -> np.ndarray:
+    """
+    A better function for uniformly spaced visual tokens, which emphasises more coverage. Evenly spaced in time, rotated in space so frames don't share the same
+    spatial offset.
+    Args:
+        M (int): The total number of visual tokens in the sequence.
+        K (int): The number of visual tokens to keep.
+        F (int): The number of frames in the sequence.
+    Returns:
+        np.ndarray: The local indices of the K tokens to keep, staggered across frames for better coverage.
+    """
+    P = M // F # get the tokens per frame.
+    base, remainder = divmod(K, F)
+    out = []
+    for frame in range(F):
+        # Spread the remaining frames.
+        kf = base + (1 if (frame * remainder) // F != ((frame + 1) * remainder) // F else 0)
+        if kf == 0:
+            continue
+        step = P / kf # get the step size.
+        phase = (frame / F) * step # stagger the phase across frames.
+        out.append(frame * P + (np.arange(kf) * step + phase).astype(int))
+    return np.concatenate(out)
+
+
+
+
+def keep_local(selector: str, scores, M: int, K: int, rng, n_frames: int) -> np.ndarray:
     """Local indices (into the visual-token block) of the K tokens this selector keeps."""
     if selector.startswith("attn_"):
         return np.argsort(-scores, kind="stable")[:K]
@@ -264,15 +316,29 @@ def keep_local(selector: str, scores, M: int, K: int, rng) -> np.ndarray:
     if selector == "random":
         return rng.choice(M, size=K, replace=False)
     if selector == "uniform":
+        """
+        This method picks one token every M/K position in the flattened token block but since the tokens are laid out frame by frame,
+        it lands on the same spatial offset in every frame.
+        """
         # Midpoint of each of K equal blocks -- distinct for every K <= M, and the same
         # even-coverage convention the frame sampler uses.
         return ((np.arange(K) + 0.5) * M / K).astype(int)
+    if selector == "uniform_stagger":
+        return uniform_stagger(M, K, n_frames)
     raise ValueError(f"unknown selector {selector!r}")
 
 
 def keep_abs_idx(S: int, visual_idx: torch.Tensor, local: np.ndarray) -> torch.Tensor:
-    """Absolute positions of the pruned sequence: every non-visual token, plus the
-    selected visual tokens, in the original order."""
+    """
+    Absolute indices (into the full sequence) of the K tokens this selector keeps,
+    for example. If the visual tokens are at positions 10, 11, 12, 13, 14 and the local indices are [0, 2], the absolute indices would be [10, 12].
+    Args:
+        S (int): The cardinality of the token set.
+        visual_idx (torch.Tensor): The indices of the visual tokens in the full sequence.
+        local (np.ndarray): The local indices of the tokens to keep (relative to the visual token block).
+    Returns:
+        torch.Tensor: The absolute indices of the tokens to keep in the full-sequence, along with the text tokens in ascending order. The result is of shape (K + T, ) where K = kept visual tokens and T = text tokens.
+    """
     keep = torch.ones(S, dtype=torch.bool, device=visual_idx.device)
     keep[visual_idx] = False
     keep[visual_idx[torch.as_tensor(np.ascontiguousarray(local), device=visual_idx.device,
@@ -282,7 +348,18 @@ def keep_abs_idx(S: int, visual_idx: torch.Tensor, local: np.ndarray) -> torch.T
 
 @torch.no_grad()
 def predict_pruned(model, embeds, position_ids, keep_abs, letter_ids) -> int:
-    """The option-letter argmax after dropping everything outside keep_abs."""
+    """
+    The forward pass using the pruned set S' of tokens, returning the predicted option index. The kept tokens retain their original positional ID.
+    The model is run with the embeddings and position ids corresponding to the kept tokens, and attn_mask is set to 1 for the kept tokens. The prediction is the argmax (greedy) over the option-letter token ids at the laast position of the sequence.
+    Args:
+        model (AutoModelForCausalLM): The language model to use for prediction.
+        embeds (torch.Tensor): The merged input embeddings of shape (B, S, D). Where S = cardinality of the token set (sequence), D = embedding dimension.
+        position_ids (torch.Tensor): The position ids of shape (3, B, S) corresponding to the embeddings. 3 because Qwen uses 3D mRoPE positioning (time, height, width).
+        keep_abs (torch.Tensor): The absolute indices (received probably after running `keep_abs_idx` function) of the retained tokens in the full sequence.
+        letter_ids (torch.Tensor): The token ids of the option letters (e.g., A, B, C, D) to consider for prediction.
+    Returns:
+        int: The predicted option index (0-based) corresponding to the argmax over the option-letter token ids at the last position of the sequence.
+    """
     out = model(inputs_embeds=embeds[:, keep_abs],
                 position_ids=position_ids[..., keep_abs],
                 attention_mask=torch.ones(1, keep_abs.numel(), dtype=torch.long,
@@ -351,9 +428,13 @@ def resolve_args(args):
     selectors = list(args.selectors)
     if args.include_bottom:
         selectors += [s.replace("attn_", "bot_") for s in selectors if s.startswith("attn_")]
-    bad = [s for s in selectors
-           if not (s in BASELINE_SELECTORS
-                   or (s.split("_", 1)[0] in ("attn", "bot") and s.split("_", 1)[-1] in STAGE_DEFAULTS))]
+    # bad = [s for s in selectors
+    #        if not (s in BASELINE_SELECTORS
+    #                or (s.split("_", 1)[0] in ("attn", "bot") and s.split("_", 1)[-1] in STAGE_DEFAULTS))]
+    bad = [s for s in selectors if not (
+        is_baseline(s) or (s.split("_", 1)[-1] in STAGE_DEFAULTS)
+    )]
+    
     if bad:
         raise ValueError(f"unknown selectors {bad}; choices: "
                          f"{[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}")
@@ -394,6 +475,7 @@ def main(args):
     seen_by_task, per_sample, skipped = {}, [], []
     heaviest_layers = {name: {} for name, (_, agg) in stages.items() if agg == "heaviest"}
     n_seen = 0
+    mass_sum = np.zeros(n_layers)
     try:
         for idx, (task, rec, path, data_type, bound) in enumerate(
                 tqdm(list(iter_clips(args)), unit="clip")):
@@ -456,7 +538,7 @@ def main(args):
                     for sel in selectors:
                         stage = sel.split("_", 1)[-1]
                         s = score_np.get(stage)
-                        local = keep_local(sel, s, M, K, rng)
+                        local = keep_local(sel, s, M, K, rng, n_frames=args.num_segments)
                         keep_abs = keep_abs_idx(S, visual_idx, local)
                         preds[f"{sel}@{r:g}"] = predict_pruned(model, embeds, pos,
                                                                keep_abs, letter_ids)
@@ -470,6 +552,7 @@ def main(args):
                 tqdm.write(f"skip [{task}] {rec['video']}: {type(e).__name__}: {e}")
                 continue
 
+            mass_sum += np.array([float(store[l].sum()) for l in range(n_layers)])
             n_seen += 1
             seen_by_task[task] = seen_by_task.get(task, 0) + 1
             tc = per_task_hits.setdefault(task, {c: 0 for c in ["full"] + configs})
@@ -505,8 +588,8 @@ def main(args):
                   delta_pts=100 * (acc[f"{a}@{r:g}"] - acc[f"{b}@{r:g}"]),
                   **mcnemar(hits[f"{a}@{r:g}"], hits[f"{b}@{r:g}"]))
              for r in rhos
-             for a in selectors if a not in BASELINE_SELECTORS
-             for b in BASELINE_SELECTORS if b in selectors]
+             for a in selectors if a not in is_baseline(a)
+             for b in selectors if is_baseline(b)]
 
     out = {"experiment": "stage_topk_accuracy", "prune": "input_drop_visual_tokens",
            "backbone": args.backbone, "model_name": args.model_name,
@@ -526,6 +609,7 @@ def main(args):
            "mcnemar": tests,
            "heaviest_layer_histogram": {n: {str(k): v for k, v in sorted(h.items())}
                                         for n, h in heaviest_layers.items()},
+            "visual_attention_mass_by_layer": (mass_sum / n_seen).tolist(),
            "per_task_seen": seen_by_task,
            "accuracy_by_task": {t: {c: h[c] / seen_by_task[t] for c in ["full"] + configs}
                                 for t, h in sorted(per_task_hits.items())},
@@ -597,6 +681,7 @@ def parse_args():
                         "'llava' -> llava-1.5, else qwen).")
     p.add_argument("--rhos", type=float, nargs="+", default=[0.01, 0.05, 0.1, 0.25, 0.5],
                    help="keep rates: K = round(rho * M) visual tokens survive.")
+    p.add_argument("--n_random", type=int, default=5, help="Independent random keeps per clip.")
     p.add_argument("--selectors", nargs="+", default=DEFAULT_SELECTORS,
                    help=f"any of {[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}.")
     p.add_argument("--include_bottom", action="store_true",
