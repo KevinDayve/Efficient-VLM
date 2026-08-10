@@ -23,7 +23,11 @@ text-only floor (`text_only_accuracy`, every visual token dropped) is drawn the
 same way, in black dash-dot: it is likewise per panel and likewise not a
 selector, and together the two lines bracket the band inside which any of these
 curves can say anything. Runs written before the floor existed simply omit the
-key and lose the line.
+key and lose the line -- but the floor is a property of the model/benchmark pair,
+not of the sweep, so it can also be measured on its own (a rho-less
+stage_topk_accuracy.py run with --text_only) and attached to a panel with
+--floor_llava_ego and friends. Such a sidecar must come from the same model,
+benchmark and clip set as the sweep it decorates, which is checked, not assumed.
 
 y axes are shared per ROW by default: the same benchmark on two backbones is the
 comparison worth making pixel-for-pixel, while EgoSchema and MVBench sit at
@@ -36,6 +40,9 @@ Run
 ---
     python final_expt_scripts/plot_scripts/plot_topk_panels.py --out final_expt_results/topk_accuracy/topk_panels.png
     python final_expt_scripts/plot_scripts/plot_topk_panels.py --y retention --out topk_panels_retention.png
+    python final_expt_scripts/plot_scripts/plot_topk_panels.py \
+        --floor_llava_ego final_expt_results/topk_accuracy/floor_ego_llavaov.json \
+        --out final_expt_results/topk_accuracy/topk_panels.png final_expt_results/topk_accuracy/topk_panels.pdf
 """
 from __future__ import annotations
 
@@ -74,6 +81,14 @@ PRETTY_SELECTOR = {"attn_early":      "attn top-K (early)",
 PRETTY_MODEL = {"llava-hf/llava-onevision-qwen2-7b-ov-hf": "LLaVA-OneVision-7B",
                 "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen2.5-VL-7B"}
 
+# The two per-panel reference lines. They stay achromatic so a colour never means
+# anything but a selector, but dark enough to read against the 0.9 grid -- pale
+# grey on white lost the ceiling exactly where it matters, next to the curves that
+# are about to cross it. Kept here rather than inline so the panels and the shared
+# legend cannot drift apart.
+CEILING = dict(color="0.25", lw=1.3, ls=":")
+FLOOR = dict(color="black", lw=0.9, ls="-.")
+
 
 def load_run(path: str):
     """(rho %, {selector: y%}, meta) for one stage_topk_accuracy.py summary JSON."""
@@ -95,6 +110,36 @@ def blind_pct(meta):
     return None if v is None else 100 * v
 
 
+def attach_floor(run, path: str):
+    """Fold a standalone text-only run's floor into `run`'s meta, in place.
+
+    The sweeps predate the floor, so theirs is measured separately: same model,
+    same benchmark, same clips, no rhos, just `--text_only`. Attaching it is only
+    honest if it really is the same setting, so the identifying fields are
+    compared and a mismatch is fatal rather than quietly plotted. full_accuracy is
+    the one field allowed to drift -- it is a re-decode of the same unpruned model
+    and can move a clip or two -- so it warns instead."""
+    if run is None:
+        raise SystemExit(f"{path}: floor given for a panel that has no run.")
+    meta = run[2]
+    with open(path) as fh:
+        floor = json.load(fh)
+
+    for key in ("model_name", "tasks", "n_clips", "num_segments"):
+        if floor.get(key) != meta.get(key):
+            raise SystemExit(f"{path}: {key} is {floor.get(key)!r} but the sweep it "
+                             f"would decorate has {meta.get(key)!r}.")
+    blind = blind_pct(floor)
+    if blind is None:
+        raise SystemExit(f"{path}: no text_only_accuracy to attach.")
+
+    delta = 100 * (floor["full_accuracy"] - meta["full_accuracy"])
+    if abs(delta) > 0.05:
+        print(f"warning: {path} full_accuracy differs from the sweep's by "
+              f"{delta:+.1f} pts; keeping the sweep's ceiling.")
+    meta["text_only_accuracy"] = floor["text_only_accuracy"]
+
+
 def draw_panel(ax, run, args):
     """One model x benchmark panel: every selector, plus its own ceiling and floor."""
     xs, curves, meta = run
@@ -106,16 +151,17 @@ def draw_panel(ax, run, args):
         ax.plot(xs, scale * curves[s], ls, marker="o", ms=4, lw=1.6, color=color)
 
     ceiling = 100.0 if args.y == "retention" else full
-    ax.axhline(ceiling, color="gray", lw=0.8, ls=":")
+    ax.axhline(ceiling, **CEILING)
     ax.annotate(f"no pruning ({full:.1f}%)", xy=(xs[0], ceiling), xytext=(0, 3),
-                textcoords="offset points", fontsize=8, color="gray", va="bottom")
+                textcoords="offset points", fontsize=8, color=CEILING["color"],
+                va="bottom")
 
     # The floor, when the run measured one. Annotated BELOW its line so it cannot
     # collide with the ceiling label on a panel where the two sit close together --
     # which is itself the finding worth seeing.
     blind = blind_pct(meta)
     if blind is not None and not args.no_floor:
-        ax.axhline(scale * blind, color="black", lw=0.9, ls="-.")
+        ax.axhline(scale * blind, **FLOOR)
         ax.annotate(f"text only ({blind:.1f}%)", xy=(xs[0], scale * blind), xytext=(0, -4),
                     textcoords="offset points", fontsize=8, color="0.15", va="top")
 
@@ -148,6 +194,14 @@ def main(args):
             for row in paths]
     if all(r is None for row in runs for r in row):
         raise SystemExit("nothing to plot: all four runs were 'none'.")
+
+    floors = [[args.floor_llava_ego, args.floor_qwen_ego],
+              [args.floor_llava_mvb, args.floor_qwen_mvb]]
+    for r in range(2):
+        for c in range(2):
+            path = floors[r][c]
+            if path.lower() != "none":
+                attach_floor(runs[r][c], path)
 
     share = {"row": "row", "all": True, "none": False}[args.share_y]
     fig, axes = plt.subplots(2, 2, figsize=tuple(args.figsize),
@@ -192,12 +246,11 @@ def main(args):
     handles = [Line2D([], [], color=STYLE[s][0], ls=STYLE[s][1], marker="o", ms=4,
                       lw=1.6, label=s if args.raw_labels else PRETTY_SELECTOR.get(s, s))
                for s in order]
-    handles.append(Line2D([], [], color="gray", lw=0.8, ls=":",
-                          label="no pruning (per panel)"))
+    handles.append(Line2D([], [], label="no pruning (per panel)", **CEILING))
     if not args.no_floor and any(run and blind_pct(run[2]) is not None
                                  for row in runs for run in row):
-        handles.append(Line2D([], [], color="black", lw=0.9, ls="-.",
-                              label="text only, 0 visual tokens (per panel)"))
+        handles.append(Line2D([], [], label="text only, 0 visual tokens (per panel)",
+                              **FLOOR))
     fig.legend(handles=handles, loc="lower center", ncol=args.legend_ncol,
                frameon=False, fontsize=9, bbox_to_anchor=(0.5, 0.0))
 
@@ -220,6 +273,12 @@ def parse_args():
                    help="'none' blanks this panel.")
     p.add_argument("--qwen_mvb", default=f"{RESULTS}/topk_mvb_qwen.json",
                    help="'none' blanks this panel.")
+    # The sweeps themselves carry no text_only_accuracy, so each panel's floor
+    # comes from its own standalone run; 'none' leaves that panel without one.
+    p.add_argument("--floor_llava_ego", default=f"{RESULTS}/floor_ego_llavaov.json")
+    p.add_argument("--floor_llava_mvb", default="none")
+    p.add_argument("--floor_qwen_ego", default="none")
+    p.add_argument("--floor_qwen_mvb", default="none")
     p.add_argument("--y", choices=["accuracy", "retention"], default="accuracy",
                    help="retention = accuracy / that panel's no-pruning accuracy.")
     p.add_argument("--share_y", choices=["row", "all", "none"], default="row",
