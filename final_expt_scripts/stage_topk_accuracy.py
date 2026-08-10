@@ -588,7 +588,7 @@ def main(args):
                   delta_pts=100 * (acc[f"{a}@{r:g}"] - acc[f"{b}@{r:g}"]),
                   **mcnemar(hits[f"{a}@{r:g}"], hits[f"{b}@{r:g}"]))
              for r in rhos
-             for a in selectors if a not in is_baseline(a)
+             for a in selectors if not is_baseline(a)
              for b in selectors if is_baseline(b)]
 
     out = {"experiment": "stage_topk_accuracy", "prune": "input_drop_visual_tokens",
