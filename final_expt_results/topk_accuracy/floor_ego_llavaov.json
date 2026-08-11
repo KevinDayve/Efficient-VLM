@@ -1,0 +1,87 @@
+{
+  "experiment": "stage_topk_accuracy",
+  "prune": "input_drop_visual_tokens",
+  "backbone": "llava_ov",
+  "model_name": "llava-hf/llava-onevision-qwen2-7b-ov-hf",
+  "data_root": "../datasets/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 16,
+  "max_pixels": null,
+  "min_pixels": null,
+  "n_layers": 28,
+  "queries": "post",
+  "estimator": "moment",
+  "k_frac": 0.1,
+  "seed": 0,
+  "rhos": [],
+  "selectors": [],
+  "stages": {},
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 500,
+  "full_accuracy": 0.596,
+  "text_only": true,
+  "text_only_accuracy": 0.314,
+  "chance_accuracy": 0.2,
+  "accuracy_by_config": {
+    "full": 0.596,
+    "text_only": 0.314
+  },
+  "accuracy_by_rho": {},
+  "retention_by_rho": {},
+  "above_floor_by_rho": {},
+  "mcnemar": [],
+  "mcnemar_vs_text_only": [],
+  "mcnemar_full_vs_text_only": {
+    "selector": "full",
+    "baseline": "text_only",
+    "delta_pts": 28.199999999999996,
+    "b": 156,
+    "c": 15,
+    "n_discordant": 171,
+    "p_value": 9.376975748480656e-31
+  },
+  "heaviest_layer_histogram": {},
+  "visual_attention_mass_by_layer": [
+    0.1010607096105814,
+    0.1459299494475126,
+    0.08658916039764882,
+    0.10170761415362359,
+    0.0401698513738811,
+    0.03422302456572652,
+    0.04308441484719515,
+    0.06508108580857515,
+    0.07782324253022671,
+    0.11539236041903496,
+    0.061563202328979966,
+    0.08472890028357506,
+    0.08467818246036768,
+    0.12083259059488774,
+    0.15239317426085472,
+    0.0814745339602232,
+    0.11858340416848659,
+    0.06839701460301877,
+    0.06661719715595245,
+    0.10016238155961037,
+    0.09385828971862793,
+    0.10683802473545075,
+    0.08739938168227672,
+    0.09392180651426316,
+    0.09439927537739277,
+    0.1006306709945202,
+    0.15007726503908633,
+    0.18747622822225093
+  ],
+  "per_task_seen": {
+    "EgoSchema": 500
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.596,
+      "text_only": 0.314
+    }
+  },
+  "skipped": []
+}

@@ -33,6 +33,25 @@ sum to one over ALL keys, so the visual-token mass at a layer sits at whatever s
 that layer's text/sink split leaves it; an unnormalised mean is just whichever layer
 is loudest.
 
+The text-only floor  (--text_only, on by default)
+-------------------------------------------------
+One extra forward per clip in which EVERY visual token is dropped -- K = 0, the rho -> 0
+limit of the same prune. Language priors, the question and the option strings are all
+still there, so this is what the model scores by reading the multiple choice and
+guessing, and no keep rate is worth reporting unless it sits above it. It is the true
+lower bound of the sweep, and the thing that says whether a curve that looks flat down
+to 1% is evidence that 1% of the tokens suffice or evidence that the benchmark barely
+needs the video. It is a single number per clip, not a curve: it does not depend on
+rho, so it is reported as a floor next to `full_accuracy` and drawn as a horizontal
+line, and every selector at every rho is McNemar-tested against it.
+
+Dropped, not re-prompted: the text tokens keep the position ids they had when the
+visual block was present (so on Qwen the mRoPE coordinates still carry the gap), and
+the prompt is byte-identical to every other config's. That makes the floor the same
+operation as the rest of the sweep at K = 0 rather than a differently-built prompt that
+would confound the comparison with a tokenisation change. Note that it therefore still
+contains whatever the chat template says about a video being present.
+
 The score is raw attention mass -- no sink handling, no value-norm reweighting, no
 positional correction -- matching tail_vs_layer.py's `--stack decoder` score exactly,
 so the gamma curves and these accuracies describe the same quantity.
@@ -75,9 +94,10 @@ clips are bit-identical to the tail-index and knockout runs.
 
 Cost
 ----
-n_clips x (1 + n_selectors x n_rhos) forwards. The dense one is eager-attention (the
-weights have to be materialised to be scored); the pruned ones are short. Defaults are
-5 selectors x 5 rhos = 26 forwards/clip, so use --max_samples for a first look.
+n_clips x (1 + n_selectors x n_rhos + text_only) forwards. The dense one is eager-
+attention (the weights have to be materialised to be scored); the pruned ones are short.
+Defaults are 5 selectors x 5 rhos + the floor = 27 forwards/clip, and the floor is the
+cheapest of them (no visual tokens at all), so use --max_samples for a first look.
 
 Run
 ---
@@ -90,6 +110,11 @@ Run
     python stage_topk_accuracy.py --data_root ~/Experiments/MVBench --tasks mvbench \
         --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
         --max_samples 50 --include_bottom --out topk_mvb_llavaov.json
+
+    # just the text-only floor, no sweep -- one dense + one blind forward per clip
+    python stage_topk_accuracy.py --data_root ~/Experiments/MVBench --tasks mvbench \
+        --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
+        --rhos --selectors --out floor_mvb_llavaov.json
 """
 from __future__ import annotations
 
@@ -445,6 +470,10 @@ def main(args):
     selectors = resolve_args(args)
     rhos = sorted(set(args.rhos))
     configs = [f"{s}@{r:g}" for r in rhos for s in selectors]
+    # Rho-independent references, carried through hits/per-task/per-sample exactly like
+    # a config so nothing downstream has to special-case them: 'full' is the ceiling
+    # (every visual token), 'text_only' the floor (none of them).
+    refs = ["full"] + (["text_only"] if args.text_only else [])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
@@ -463,14 +492,16 @@ def main(args):
         print(f"[stage] {name:<5} layers {band[0]}-{band[-1]} ({len(band)}), agg={agg}")
     print(f"[prune] input-space drop, original position ids kept, "
           f"queries={args.queries}, budgets rho={rhos}")
-    print(f"[prune] selectors: {selectors}  ->  {1 + len(configs)} forwards/clip")
+    print(f"[prune] selectors: {selectors}  ->  {len(refs) + len(configs)} forwards/clip")
+    if args.text_only:
+        print("[floor] text-only: one forward per clip with every visual token dropped")
     print(f"[data] tasks={args.tasks}  {args.num_segments} frames/clip")
 
     store, ctx = {}, {"capture": False}
     uninstall = attach_capture(model, store, ctx)
 
     letter_cache = {}
-    hits = {c: [] for c in ["full"] + configs}      # config -> per-clip 0/1, clip-aligned
+    hits = {c: [] for c in refs + configs}          # config -> per-clip 0/1, clip-aligned
     per_task_hits = {}
     seen_by_task, per_sample, skipped = {}, [], []
     heaviest_layers = {name: {} for name, (_, agg) in stages.items() if agg == "heaviest"}
@@ -530,9 +561,16 @@ def main(args):
                           for name, (band, agg) in stages.items()}
                 score_np = {name: s.numpy() for name, (s, _, _) in scored.items()}
 
+                # ---- the floor: the same prune at K = 0, no visual tokens at all ----
+                preds, kept = {}, {}
+                if args.text_only:
+                    preds["text_only"] = predict_pruned(
+                        model, embeds, pos,
+                        keep_abs_idx(S, visual_idx, np.empty(0, dtype=np.int64)),
+                        letter_ids)
+
                 # ---- one pruned forward per (rho, selector) ----
                 rng = np.random.default_rng([args.seed, idx])
-                preds, kept = {}, {}
                 for r in rhos:
                     K = int(min(M, max(1, round(r * M))))
                     for sel in selectors:
@@ -555,9 +593,9 @@ def main(args):
             mass_sum += np.array([float(store[l].sum()) for l in range(n_layers)])
             n_seen += 1
             seen_by_task[task] = seen_by_task.get(task, 0) + 1
-            tc = per_task_hits.setdefault(task, {c: 0 for c in ["full"] + configs})
+            tc = per_task_hits.setdefault(task, {c: 0 for c in refs + configs})
             preds["full"] = full_pred
-            for c in ["full"] + configs:
+            for c in refs + configs:
                 hit = int(preds[c] == gold)
                 hits[c].append(hit)
                 tc[c] += hit
@@ -583,13 +621,20 @@ def main(args):
         print("no usable clips -- check --data_root layout (json/ and video/).")
         return
 
-    acc = {c: sum(hits[c]) / n_seen for c in ["full"] + configs}
+    acc = {c: sum(hits[c]) / n_seen for c in refs + configs}
     tests = [dict(rho=r, selector=a, baseline=b,
                   delta_pts=100 * (acc[f"{a}@{r:g}"] - acc[f"{b}@{r:g}"]),
                   **mcnemar(hits[f"{a}@{r:g}"], hits[f"{b}@{r:g}"]))
              for r in rhos
              for a in selectors if not is_baseline(a)
              for b in selectors if is_baseline(b)]
+    # Against the floor, EVERY selector is on trial -- the unranked ones included. A
+    # keep rate at which random is no better than blind is a keep rate at which the
+    # benchmark, not the selector, is doing the answering.
+    floor_tests = [dict(rho=r, selector=a, baseline="text_only",
+                        delta_pts=100 * (acc[f"{a}@{r:g}"] - acc["text_only"]),
+                        **mcnemar(hits[f"{a}@{r:g}"], hits["text_only"]))
+                   for r in rhos for a in selectors] if args.text_only else []
 
     out = {"experiment": "stage_topk_accuracy", "prune": "input_drop_visual_tokens",
            "backbone": args.backbone, "model_name": args.model_name,
@@ -601,17 +646,34 @@ def main(args):
            "stages": {n: {"layers": b, "agg": a} for n, (b, a) in stages.items()},
            "scoring": "argmax over option-letter tokens", "answer_prefix": ANSWER_PREFIX,
            "n_clips": n_seen, "full_accuracy": acc["full"],
+           "text_only": args.text_only,
+           "text_only_accuracy": acc.get("text_only"),
+           "chance_accuracy": (sum(1.0 / s["n_options"] for s in per_sample) / n_seen),
            "accuracy_by_config": acc,
            "accuracy_by_rho": {f"{r:g}": {s: acc[f"{s}@{r:g}"] for s in selectors} for r in rhos},
            "retention_by_rho": {f"{r:g}": {s: (acc[f"{s}@{r:g}"] / acc["full"]
                                                if acc["full"] > 0 else float("nan"))
                                            for s in selectors} for r in rhos},
+           # Where a budget sits on the floor -> ceiling scale: 0 = the video bought it
+           # nothing over answering blind, 1 = it kept everything the video was worth.
+           # Undefined (nan) when the video buys the model nothing to begin with.
+           "above_floor_by_rho": ({f"{r:g}": {s: ((acc[f"{s}@{r:g}"] - acc["text_only"])
+                                                  / (acc["full"] - acc["text_only"])
+                                                  if acc["full"] != acc["text_only"]
+                                                  else float("nan"))
+                                              for s in selectors} for r in rhos}
+                                  if args.text_only else None),
            "mcnemar": tests,
+           "mcnemar_vs_text_only": floor_tests,
+           "mcnemar_full_vs_text_only": (dict(selector="full", baseline="text_only",
+                                              delta_pts=100 * (acc["full"] - acc["text_only"]),
+                                              **mcnemar(hits["full"], hits["text_only"]))
+                                         if args.text_only else None),
            "heaviest_layer_histogram": {n: {str(k): v for k, v in sorted(h.items())}
                                         for n, h in heaviest_layers.items()},
             "visual_attention_mass_by_layer": (mass_sum / n_seen).tolist(),
            "per_task_seen": seen_by_task,
-           "accuracy_by_task": {t: {c: h[c] / seen_by_task[t] for c in ["full"] + configs}
+           "accuracy_by_task": {t: {c: h[c] / seen_by_task[t] for c in refs + configs}
                                 for t, h in sorted(per_task_hits.items())},
            "skipped": skipped}
 
@@ -619,16 +681,30 @@ def main(args):
     print(f"\n==== attention top-K vs. random/uniform ({n_seen} clips) ====")
     print(f"{args.backbone}: {args.model_name}, {args.num_segments} frames, "
           f"{len(seen_by_task)} task(s)")
-    print(f"full (no pruning) accuracy = {acc['full']:.4f}\n")
+    print(f"full (no pruning)   accuracy = {acc['full']:.4f}   <- ceiling")
+    if args.text_only:
+        ft = out["mcnemar_full_vs_text_only"]
+        print(f"text only (0 tokens) accuracy = {acc['text_only']:.4f}   <- floor, "
+              f"the video is worth {ft['delta_pts']:+.2f} pts (p={ft['p_value']:.3g})")
+    print(f"chance (1/n_options)         = {out['chance_accuracy']:.4f}\n")
     print(f"{'rho':>6} " + " ".join(f"{s:>12s}" for s in selectors))
     for r in rhos:
         print(f"{r:>6g} " + " ".join(f"{100 * acc[f'{s}@{r:g}']:11.1f}%" for s in selectors))
+    if args.text_only:
+        print(f"{'blind':>6} " + " ".join(f"{100 * acc['text_only']:11.1f}%" for _ in selectors))
     print("\nMcNemar (exact, two-sided) against the unranked floors:")
     for t in tests:
         flag = "significant" if t["p_value"] < 0.05 else "n.s."
         print(f"  rho={t['rho']:<5g} {t['selector']:>10s} - {t['baseline']:<8s} "
               f"{t['delta_pts']:+6.2f} pts  (b={t['b']:>4d} c={t['c']:>4d}, "
               f"p={t['p_value']:.3g}, {flag})")
+    if floor_tests:
+        print("\nMcNemar against the text-only floor (does this budget beat seeing nothing?):")
+        for t in floor_tests:
+            flag = "significant" if t["p_value"] < 0.05 else "n.s."
+            print(f"  rho={t['rho']:<5g} {t['selector']:>10s} - text_only "
+                  f"{t['delta_pts']:+6.2f} pts  (b={t['b']:>4d} c={t['c']:>4d}, "
+                  f"p={t['p_value']:.3g}, {flag})")
     for name, hist in out["heaviest_layer_histogram"].items():
         if hist:
             print(f"\nheaviest-tailed {name} layer, over clips: "
@@ -645,7 +721,7 @@ def main(args):
         json.dump(per_sample, fh, indent=2)
     print(f"wrote {per_sample_out}")
 
-    if args.plot:
+    if args.plot and rhos and selectors:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
@@ -656,6 +732,11 @@ def main(args):
             style = "--" if s in BASELINE_SELECTORS else "-"
             plt.plot(100 * xs, ys, style, marker="o", ms=4, color=f"C{i}", label=s)
         plt.axhline(100 * acc["full"], color="gray", lw=0.8, ls=":", label="no pruning")
+        if args.text_only:
+            # The floor closes the band: anything between this line and the ceiling is
+            # what the surviving visual tokens are actually buying.
+            plt.axhline(100 * acc["text_only"], color="black", lw=0.8, ls="-.",
+                        label="text only (0 visual tokens)")
         plt.xscale("log")
         plt.xlabel("visual tokens kept (%)")
         plt.ylabel("accuracy (%)")
@@ -679,14 +760,20 @@ def parse_args():
     p.add_argument("--backbone", choices=["auto", "qwen", "llava_ov", "llava"], default="auto",
                    help="auto infers from --model_name (onevision/-ov- -> llava_ov, else "
                         "'llava' -> llava-1.5, else qwen).")
-    p.add_argument("--rhos", type=float, nargs="+", default=[0.01, 0.05, 0.1, 0.25, 0.5],
-                   help="keep rates: K = round(rho * M) visual tokens survive.")
+    p.add_argument("--rhos", type=float, nargs="*", default=[0.01, 0.05, 0.1, 0.25, 0.5],
+                   help="keep rates: K = round(rho * M) visual tokens survive. Pass with no "
+                        "values to skip the sweep entirely (floor + ceiling only).")
     p.add_argument("--n_random", type=int, default=5, help="Independent random keeps per clip.")
-    p.add_argument("--selectors", nargs="+", default=DEFAULT_SELECTORS,
-                   help=f"any of {[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}.")
+    p.add_argument("--selectors", nargs="*", default=DEFAULT_SELECTORS,
+                   help=f"any of {[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}. "
+                        f"Pass with no values to run no selectors at all.")
     p.add_argument("--include_bottom", action="store_true",
                    help="also run bottom-K by each attention score -- the control that says "
                         "whether the ranking carries any usable order at all.")
+    p.add_argument("--text_only", action=argparse.BooleanOptionalAction, default=True,
+                   help="one extra forward per clip with EVERY visual token dropped: the "
+                        "rho->0 floor of the same prune, i.e. what the model scores from the "
+                        "question and options alone. --no-text_only skips it.")
     for name, (band, agg) in STAGE_DEFAULTS.items():
         p.add_argument(f"--{name}_band", default=band,
                        help=f"0-indexed layers for the {name} stage (default {band}). "
