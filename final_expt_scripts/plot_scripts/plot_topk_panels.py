@@ -277,8 +277,8 @@ def parse_args():
     # comes from its own standalone run; 'none' leaves that panel without one.
     p.add_argument("--floor_llava_ego", default=f"{RESULTS}/floor_ego_llavaov.json")
     p.add_argument("--floor_llava_mvb", default=f"{RESULTS}/floor_mvb_llavaov.json")
-    p.add_argument("--floor_qwen_ego", default="none")
-    p.add_argument("--floor_qwen_mvb", default="none")
+    p.add_argument("--floor_qwen_ego", default=f"{RESULTS}/floor_ego_qwen.json")
+    p.add_argument("--floor_qwen_mvb", default=f"{RESULTS}/floor_mvb_qwen.json")
     p.add_argument("--y", choices=["accuracy", "retention"], default="accuracy",
                    help="retention = accuracy / that panel's no-pruning accuracy.")
     p.add_argument("--share_y", choices=["row", "all", "none"], default="row",
