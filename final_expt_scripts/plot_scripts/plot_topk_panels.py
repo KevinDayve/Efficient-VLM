@@ -276,7 +276,7 @@ def parse_args():
     # The sweeps themselves carry no text_only_accuracy, so each panel's floor
     # comes from its own standalone run; 'none' leaves that panel without one.
     p.add_argument("--floor_llava_ego", default=f"{RESULTS}/floor_ego_llavaov.json")
-    p.add_argument("--floor_llava_mvb", default="none")
+    p.add_argument("--floor_llava_mvb", default=f"{RESULTS}/floor_mvb_llavaov.json")
     p.add_argument("--floor_qwen_ego", default="none")
     p.add_argument("--floor_qwen_mvb", default="none")
     p.add_argument("--y", choices=["accuracy", "retention"], default="accuracy",
