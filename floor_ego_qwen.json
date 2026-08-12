@@ -1,0 +1,87 @@
+{
+  "experiment": "stage_topk_accuracy",
+  "prune": "input_drop_visual_tokens",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "data_root": "/home/ubuntu/Experiments/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 16,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "n_layers": 28,
+  "queries": "post",
+  "estimator": "moment",
+  "k_frac": 0.1,
+  "seed": 0,
+  "rhos": [],
+  "selectors": [],
+  "stages": {},
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 500,
+  "full_accuracy": 0.61,
+  "text_only": true,
+  "text_only_accuracy": 0.312,
+  "chance_accuracy": 0.20000000000000176,
+  "accuracy_by_config": {
+    "full": 0.61,
+    "text_only": 0.312
+  },
+  "accuracy_by_rho": {},
+  "retention_by_rho": {},
+  "above_floor_by_rho": {},
+  "mcnemar": [],
+  "mcnemar_vs_text_only": [],
+  "mcnemar_full_vs_text_only": {
+    "selector": "full",
+    "baseline": "text_only",
+    "delta_pts": 29.799999999999997,
+    "b": 164,
+    "c": 15,
+    "n_discordant": 179,
+    "p_value": 7.449301288142954e-33
+  },
+  "heaviest_layer_histogram": {},
+  "visual_attention_mass_by_layer": [
+    0.061640814661979675,
+    0.06175966428220272,
+    0.06326789508759975,
+    0.05912074043601751,
+    0.03225627291947603,
+    0.036444140680134296,
+    0.033412240236997605,
+    0.0344418768696487,
+    0.05544792707264423,
+    0.0926678298637271,
+    0.051119908966124054,
+    0.05548065545409918,
+    0.06537897922843695,
+    0.08579121661186219,
+    0.10079266183078289,
+    0.05869837296754122,
+    0.083431734777987,
+    0.05329201685264707,
+    0.04719792899861932,
+    0.0742966949492693,
+    0.05687393762543797,
+    0.0687397687509656,
+    0.055350381802767516,
+    0.05188371891528368,
+    0.04765728211402893,
+    0.049466399487107994,
+    0.0637666775584221,
+    0.07826190456748008
+  ],
+  "per_task_seen": {
+    "EgoSchema": 500
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.61,
+      "text_only": 0.312
+    }
+  },
+  "skipped": []
+}
