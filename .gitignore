@@ -1,5 +1,6 @@
 # checkpoints and model weights
 checkpoints/
+Presentation/
 *.pt
 *.pth
 *.bin
@@ -47,4 +48,4 @@ runs/
 Thumbs.db
 
 # Local clone of huggingface/transformers (changes tracked via patches/, not vendored)
-transformers/
+transformers/final_expt_results/frame_level_accuracy/examples.zip

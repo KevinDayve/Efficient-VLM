@@ -1,0 +1,1822 @@
+{
+  "experiment": "frame_lever_accuracy",
+  "backbone": "llava_ov",
+  "model_name": "llava-hf/llava-onevision-qwen2-7b-ov-hf",
+  "data_root": "../datasets/MVBench/",
+  "tasks": [
+    "Action Sequence",
+    "Action Prediction",
+    "Action Antonym",
+    "Fine-grained Action",
+    "Unexpected Action",
+    "Object Existence",
+    "Object Interaction",
+    "Object Shuffle",
+    "Moving Direction",
+    "Action Localization",
+    "Scene Transition",
+    "Action Count",
+    "Moving Count",
+    "Moving Attribute",
+    "State Change",
+    "Fine-grained Pose",
+    "Character Order",
+    "Egocentric Navigation",
+    "Episodic Reasoning",
+    "Counterfactual Inference"
+  ],
+  "num_segments": 16,
+  "single_repeat": 2,
+  "max_pixels": null,
+  "min_pixels": null,
+  "n_layers": 28,
+  "dec_band": [
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "queries": "post",
+  "estimator": "moment",
+  "k_frac": 0.1,
+  "seed": 0,
+  "clip_model": null,
+  "scorers": [
+    "xi_encq",
+    "xi_sal",
+    "mass_encq",
+    "motion",
+    "dec_xi",
+    "dec_mass",
+    "conf",
+    "ctx_level",
+    "ctx_cp_post",
+    "ctx_cp_pre",
+    "middle",
+    "random"
+  ],
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 3800,
+  "n_mixed_clips": 1525,
+  "chance_accuracy": 0.28464912280701754,
+  "anchors": {
+    "all": 0.5631578947368421,
+    "blind": 0.37526315789473685,
+    "single_mean": 0.4360361842105263,
+    "single_best": 0.6281578947368421,
+    "single_worst": 0.2268421052631579
+  },
+  "selection_headroom_pts": 6.500000000000005,
+  "accuracy_by_scorer": {
+    "xi_encq": 0.4405263157894737,
+    "xi_sal": 0.43473684210526314,
+    "mass_encq": 0.43526315789473685,
+    "motion": 0.44026315789473686,
+    "dec_xi": 0.41342105263157897,
+    "dec_mass": 0.43394736842105264,
+    "conf": 0.46710526315789475,
+    "ctx_level": 0.43236842105263157,
+    "ctx_cp_post": 0.43605263157894736,
+    "ctx_cp_pre": 0.43,
+    "middle": 0.4423684210526316,
+    "random": 0.4405263157894737
+  },
+  "delta_vs_single_mean_pts": {
+    "xi_encq": 0.44901315789473983,
+    "xi_sal": -0.12993421052631682,
+    "mass_encq": -0.07730263157894601,
+    "motion": 0.42269736842105443,
+    "dec_xi": -2.2615131578947345,
+    "dec_mass": -0.20888157894736747,
+    "conf": 3.1069078947368434,
+    "ctx_level": -0.36677631578947434,
+    "ctx_cp_post": 0.0016447368421046438,
+    "ctx_cp_pre": -0.6036184210526319,
+    "middle": 0.6332236842105265,
+    "random": 0.44901315789473983
+  },
+  "headroom_captured": {
+    "xi_encq": 0.023371286704905552,
+    "xi_sal": -0.006763119595925059,
+    "mass_encq": -0.0040236281140312614,
+    "motion": 0.022001540963958656,
+    "dec_xi": -0.11771252461261864,
+    "dec_mass": -0.010872356818765465,
+    "conf": 0.16171560654053596,
+    "ctx_level": -0.019090831264446568,
+    "ctx_cp_post": 8.560910880914504e-05,
+    "ctx_cp_pre": -0.03141854293296808,
+    "middle": 0.03295950689153326,
+    "random": 0.023371286704905552
+  },
+  "discrimination": {
+    "xi_encq": {
+      "pooled_auc": 0.4972804461286717,
+      "within_clip_auc": 0.5011668593246462,
+      "top1_on_mixed": 0.5324590163934426,
+      "mean_score_correct_minus_incorrect": -0.0021832984328598037,
+      "n_mixed_scored": 1525
+    },
+    "xi_sal": {
+      "pooled_auc": 0.5032793894330742,
+      "within_clip_auc": 0.4959707216735905,
+      "top1_on_mixed": 0.5180327868852459,
+      "mean_score_correct_minus_incorrect": 0.001861369829852244,
+      "n_mixed_scored": 1525
+    },
+    "mass_encq": {
+      "pooled_auc": 0.48592025671194805,
+      "within_clip_auc": 0.5008989246181869,
+      "top1_on_mixed": 0.519344262295082,
+      "mean_score_correct_minus_incorrect": -0.008322497234205195,
+      "n_mixed_scored": 1525
+    },
+    "motion": {
+      "pooled_auc": 0.48675467720557974,
+      "within_clip_auc": 0.5039922251018563,
+      "top1_on_mixed": 0.5318032786885246,
+      "mean_score_correct_minus_incorrect": -0.005612892919400009,
+      "n_mixed_scored": 1525
+    },
+    "dec_xi": {
+      "pooled_auc": 0.49541825079453233,
+      "within_clip_auc": 0.47087056136031546,
+      "top1_on_mixed": 0.46491803278688526,
+      "mean_score_correct_minus_incorrect": -0.0019536136468755183,
+      "n_mixed_scored": 1525
+    },
+    "dec_mass": {
+      "pooled_auc": 0.5025162131177472,
+      "within_clip_auc": 0.5073677195982524,
+      "top1_on_mixed": 0.5160655737704918,
+      "mean_score_correct_minus_incorrect": 5.894960075636391e-10,
+      "n_mixed_scored": 1525
+    },
+    "conf": {
+      "pooled_auc": 0.6229656791212825,
+      "within_clip_auc": 0.5729295580330416,
+      "top1_on_mixed": 0.598688524590164,
+      "mean_score_correct_minus_incorrect": 0.5321057009527981,
+      "n_mixed_scored": 1525
+    },
+    "ctx_level": {
+      "pooled_auc": 0.5025240527440288,
+      "within_clip_auc": 0.5109448327173737,
+      "top1_on_mixed": 0.5121311475409837,
+      "mean_score_correct_minus_incorrect": 1.4766424429157985e-06,
+      "n_mixed_scored": 1525
+    },
+    "ctx_cp_post": {
+      "pooled_auc": 0.4999201349684949,
+      "within_clip_auc": 0.5012790774414764,
+      "top1_on_mixed": 0.521311475409836,
+      "mean_score_correct_minus_incorrect": 1.3238783415818136e-06,
+      "n_mixed_scored": 1525
+    },
+    "ctx_cp_pre": {
+      "pooled_auc": 0.4978858156716348,
+      "within_clip_auc": 0.495407392362888,
+      "top1_on_mixed": 0.5062295081967213,
+      "mean_score_correct_minus_incorrect": 5.449321485290193e-07,
+      "n_mixed_scored": 1525
+    },
+    "middle": {
+      "pooled_auc": 0.5061157115484353,
+      "within_clip_auc": 0.5288233847209256,
+      "top1_on_mixed": 0.5370491803278689,
+      "mean_score_correct_minus_incorrect": 0.04892569238748168,
+      "n_mixed_scored": 1525
+    },
+    "random": {
+      "pooled_auc": 0.5014566562463826,
+      "within_clip_auc": 0.5123177191660798,
+      "top1_on_mixed": 0.5324590163934426,
+      "mean_score_correct_minus_incorrect": 0.001448646240800655,
+      "n_mixed_scored": 1525
+    }
+  },
+  "mcnemar_vs_floors": [
+    {
+      "scorer": "xi_encq",
+      "baseline": "middle",
+      "delta_pts": -0.18421052631578672,
+      "b": 221,
+      "c": 228,
+      "n_discordant": 449,
+      "p_value": 0.7770932837712956
+    },
+    {
+      "scorer": "xi_encq",
+      "baseline": "random",
+      "delta_pts": 0.0,
+      "b": 263,
+      "c": 263,
+      "n_discordant": 526,
+      "p_value": 1.0
+    },
+    {
+      "scorer": "xi_sal",
+      "baseline": "middle",
+      "delta_pts": -0.7631578947368434,
+      "b": 235,
+      "c": 264,
+      "n_discordant": 499,
+      "p_value": 0.20999786073099827
+    },
+    {
+      "scorer": "xi_sal",
+      "baseline": "random",
+      "delta_pts": -0.5789473684210567,
+      "b": 236,
+      "c": 258,
+      "n_discordant": 494,
+      "p_value": 0.34475224332691673
+    },
+    {
+      "scorer": "mass_encq",
+      "baseline": "middle",
+      "delta_pts": -0.7105263157894726,
+      "b": 243,
+      "c": 270,
+      "n_discordant": 513,
+      "p_value": 0.25097397673587624
+    },
+    {
+      "scorer": "mass_encq",
+      "baseline": "random",
+      "delta_pts": -0.5263157894736858,
+      "b": 258,
+      "c": 278,
+      "n_discordant": 536,
+      "p_value": 0.41185534013209557
+    },
+    {
+      "scorer": "motion",
+      "baseline": "middle",
+      "delta_pts": -0.21052631578947212,
+      "b": 222,
+      "c": 230,
+      "n_discordant": 452,
+      "p_value": 0.742006043876423
+    },
+    {
+      "scorer": "motion",
+      "baseline": "random",
+      "delta_pts": -0.026315789473685403,
+      "b": 248,
+      "c": 249,
+      "n_discordant": 497,
+      "p_value": 1.0
+    },
+    {
+      "scorer": "dec_xi",
+      "baseline": "middle",
+      "delta_pts": -2.894736842105261,
+      "b": 196,
+      "c": 306,
+      "n_discordant": 502,
+      "p_value": 1.042014837020241e-06
+    },
+    {
+      "scorer": "dec_xi",
+      "baseline": "random",
+      "delta_pts": -2.7105263157894743,
+      "b": 207,
+      "c": 310,
+      "n_discordant": 517,
+      "p_value": 6.795948930360637e-06
+    },
+    {
+      "scorer": "dec_mass",
+      "baseline": "middle",
+      "delta_pts": -0.842105263157894,
+      "b": 235,
+      "c": 267,
+      "n_discordant": 502,
+      "p_value": 0.1664174174475303
+    },
+    {
+      "scorer": "dec_mass",
+      "baseline": "random",
+      "delta_pts": -0.6578947368421073,
+      "b": 235,
+      "c": 260,
+      "n_discordant": 495,
+      "p_value": 0.28069961259137804
+    },
+    {
+      "scorer": "conf",
+      "baseline": "middle",
+      "delta_pts": 2.473684210526317,
+      "b": 276,
+      "c": 182,
+      "n_discordant": 458,
+      "p_value": 1.3008590755546476e-05
+    },
+    {
+      "scorer": "conf",
+      "baseline": "random",
+      "delta_pts": 2.6578947368421035,
+      "b": 287,
+      "c": 186,
+      "n_discordant": 473,
+      "p_value": 3.938705369552844e-06
+    },
+    {
+      "scorer": "ctx_level",
+      "baseline": "middle",
+      "delta_pts": -1.0000000000000009,
+      "b": 288,
+      "c": 326,
+      "n_discordant": 614,
+      "p_value": 0.1353200551881692
+    },
+    {
+      "scorer": "ctx_level",
+      "baseline": "random",
+      "delta_pts": -0.8157894736842142,
+      "b": 271,
+      "c": 302,
+      "n_discordant": 573,
+      "p_value": 0.21007046342785016
+    },
+    {
+      "scorer": "ctx_cp_post",
+      "baseline": "middle",
+      "delta_pts": -0.6315789473684219,
+      "b": 285,
+      "c": 309,
+      "n_discordant": 594,
+      "p_value": 0.3453298018682624
+    },
+    {
+      "scorer": "ctx_cp_post",
+      "baseline": "random",
+      "delta_pts": -0.4473684210526352,
+      "b": 254,
+      "c": 271,
+      "n_discordant": 525,
+      "p_value": 0.48502702184138463
+    },
+    {
+      "scorer": "ctx_cp_pre",
+      "baseline": "middle",
+      "delta_pts": -1.2368421052631584,
+      "b": 274,
+      "c": 321,
+      "n_discordant": 595,
+      "p_value": 0.05922864176088147
+    },
+    {
+      "scorer": "ctx_cp_pre",
+      "baseline": "random",
+      "delta_pts": -1.0526315789473717,
+      "b": 262,
+      "c": 302,
+      "n_discordant": 564,
+      "p_value": 0.10046402336794734
+    }
+  ],
+  "mcnemar_single_best_vs_all": {
+    "scorer": "single_best",
+    "baseline": "all",
+    "delta_pts": 6.500000000000005,
+    "b": 672,
+    "c": 425,
+    "n_discordant": 1097,
+    "p_value": 8.755082704671625e-14
+  },
+  "mcnemar_all_vs_blind": {
+    "scorer": "all",
+    "baseline": "blind",
+    "delta_pts": 18.789473684210524,
+    "b": 991,
+    "c": 277,
+    "n_discordant": 1268,
+    "p_value": 1.7753436500237198e-94
+  },
+  "accuracy_by_position": [
+    0.4160526315789474,
+    0.4189473684210526,
+    0.4263157894736842,
+    0.4342105263157895,
+    0.43842105263157893,
+    0.44394736842105265,
+    0.4407894736842105,
+    0.4423684210526316,
+    0.43842105263157893,
+    0.44105263157894736,
+    0.4413157894736842,
+    0.44342105263157894,
+    0.43894736842105264,
+    0.43394736842105264,
+    0.4413157894736842,
+    0.4371052631578947
+  ],
+  "best_position_histogram": [
+    1581.0,
+    160.0,
+    119.0,
+    105.0,
+    76.0,
+    60.0,
+    47.0,
+    39.0,
+    44.0,
+    41.0,
+    28.0,
+    18.0,
+    18.0,
+    19.0,
+    16.0,
+    16.0
+  ],
+  "per_task_seen": {
+    "Action Sequence": 200,
+    "Action Prediction": 200,
+    "Action Antonym": 200,
+    "Fine-grained Action": 200,
+    "Unexpected Action": 200,
+    "Object Existence": 200,
+    "Object Interaction": 200,
+    "Object Shuffle": 200,
+    "Moving Direction": 200,
+    "Action Localization": 200,
+    "Scene Transition": 200,
+    "Action Count": 200,
+    "Moving Count": 200,
+    "Moving Attribute": 200,
+    "State Change": 200,
+    "Character Order": 200,
+    "Egocentric Navigation": 200,
+    "Episodic Reasoning": 200,
+    "Counterfactual Inference": 200
+  },
+  "accuracy_by_task": {
+    "Action Antonym": {
+      "all": 0.72,
+      "blind": 0.725,
+      "single_best": 0.89,
+      "single_worst": 0.33,
+      "xi_encq": 0.645,
+      "xi_sal": 0.685,
+      "mass_encq": 0.625,
+      "motion": 0.71,
+      "dec_xi": 0.545,
+      "dec_mass": 0.605,
+      "conf": 0.685,
+      "ctx_level": 0.575,
+      "ctx_cp_post": 0.575,
+      "ctx_cp_pre": 0.54,
+      "middle": 0.675,
+      "random": 0.64,
+      "single_mean": 0.6340625
+    },
+    "Action Count": {
+      "all": 0.365,
+      "blind": 0.3,
+      "single_best": 0.4,
+      "single_worst": 0.235,
+      "xi_encq": 0.335,
+      "xi_sal": 0.32,
+      "mass_encq": 0.325,
+      "motion": 0.32,
+      "dec_xi": 0.31,
+      "dec_mass": 0.315,
+      "conf": 0.315,
+      "ctx_level": 0.315,
+      "ctx_cp_post": 0.33,
+      "ctx_cp_pre": 0.305,
+      "middle": 0.3,
+      "random": 0.295,
+      "single_mean": 0.31125
+    },
+    "Action Localization": {
+      "all": 0.5,
+      "blind": 0.25,
+      "single_best": 0.465,
+      "single_worst": 0.14,
+      "xi_encq": 0.3,
+      "xi_sal": 0.31,
+      "mass_encq": 0.295,
+      "motion": 0.29,
+      "dec_xi": 0.31,
+      "dec_mass": 0.34,
+      "conf": 0.285,
+      "ctx_level": 0.265,
+      "ctx_cp_post": 0.265,
+      "ctx_cp_pre": 0.295,
+      "middle": 0.28,
+      "random": 0.315,
+      "single_mean": 0.2978125
+    },
+    "Action Prediction": {
+      "all": 0.59,
+      "blind": 0.295,
+      "single_best": 0.675,
+      "single_worst": 0.13,
+      "xi_encq": 0.375,
+      "xi_sal": 0.4,
+      "mass_encq": 0.415,
+      "motion": 0.395,
+      "dec_xi": 0.35,
+      "dec_mass": 0.395,
+      "conf": 0.46,
+      "ctx_level": 0.455,
+      "ctx_cp_post": 0.445,
+      "ctx_cp_pre": 0.435,
+      "middle": 0.375,
+      "random": 0.435,
+      "single_mean": 0.401875
+    },
+    "Action Sequence": {
+      "all": 0.73,
+      "blind": 0.34,
+      "single_best": 0.655,
+      "single_worst": 0.14,
+      "xi_encq": 0.42,
+      "xi_sal": 0.385,
+      "mass_encq": 0.43,
+      "motion": 0.4,
+      "dec_xi": 0.395,
+      "dec_mass": 0.445,
+      "conf": 0.485,
+      "ctx_level": 0.445,
+      "ctx_cp_post": 0.435,
+      "ctx_cp_pre": 0.44,
+      "middle": 0.435,
+      "random": 0.42,
+      "single_mean": 0.4225
+    },
+    "Character Order": {
+      "all": 0.605,
+      "blind": 0.34,
+      "single_best": 0.815,
+      "single_worst": 0.185,
+      "xi_encq": 0.5,
+      "xi_sal": 0.455,
+      "mass_encq": 0.465,
+      "motion": 0.505,
+      "dec_xi": 0.415,
+      "dec_mass": 0.465,
+      "conf": 0.585,
+      "ctx_level": 0.525,
+      "ctx_cp_post": 0.51,
+      "ctx_cp_pre": 0.485,
+      "middle": 0.485,
+      "random": 0.455,
+      "single_mean": 0.480625
+    },
+    "Counterfactual Inference": {
+      "all": 0.505,
+      "blind": 0.335,
+      "single_best": 0.65,
+      "single_worst": 0.14,
+      "xi_encq": 0.415,
+      "xi_sal": 0.4,
+      "mass_encq": 0.395,
+      "motion": 0.455,
+      "dec_xi": 0.41,
+      "dec_mass": 0.38,
+      "conf": 0.395,
+      "ctx_level": 0.315,
+      "ctx_cp_post": 0.345,
+      "ctx_cp_pre": 0.325,
+      "middle": 0.45,
+      "random": 0.375,
+      "single_mean": 0.4096875
+    },
+    "Egocentric Navigation": {
+      "all": 0.325,
+      "blind": 0.295,
+      "single_best": 0.33,
+      "single_worst": 0.22,
+      "xi_encq": 0.285,
+      "xi_sal": 0.255,
+      "mass_encq": 0.26,
+      "motion": 0.285,
+      "dec_xi": 0.27,
+      "dec_mass": 0.27,
+      "conf": 0.26,
+      "ctx_level": 0.265,
+      "ctx_cp_post": 0.275,
+      "ctx_cp_pre": 0.285,
+      "middle": 0.265,
+      "random": 0.28,
+      "single_mean": 0.26875
+    },
+    "Episodic Reasoning": {
+      "all": 0.55,
+      "blind": 0.44,
+      "single_best": 0.56,
+      "single_worst": 0.25,
+      "xi_encq": 0.44,
+      "xi_sal": 0.42,
+      "mass_encq": 0.41,
+      "motion": 0.42,
+      "dec_xi": 0.4,
+      "dec_mass": 0.405,
+      "conf": 0.47,
+      "ctx_level": 0.425,
+      "ctx_cp_post": 0.44,
+      "ctx_cp_pre": 0.44,
+      "middle": 0.43,
+      "random": 0.41,
+      "single_mean": 0.419375
+    },
+    "Fine-grained Action": {
+      "all": 0.46,
+      "blind": 0.29,
+      "single_best": 0.55,
+      "single_worst": 0.22,
+      "xi_encq": 0.4,
+      "xi_sal": 0.425,
+      "mass_encq": 0.37,
+      "motion": 0.36,
+      "dec_xi": 0.365,
+      "dec_mass": 0.365,
+      "conf": 0.4,
+      "ctx_level": 0.37,
+      "ctx_cp_post": 0.38,
+      "ctx_cp_pre": 0.385,
+      "middle": 0.365,
+      "random": 0.385,
+      "single_mean": 0.3734375
+    },
+    "Moving Attribute": {
+      "all": 0.705,
+      "blind": 0.36,
+      "single_best": 0.85,
+      "single_worst": 0.23,
+      "xi_encq": 0.56,
+      "xi_sal": 0.595,
+      "mass_encq": 0.57,
+      "motion": 0.52,
+      "dec_xi": 0.56,
+      "dec_mass": 0.575,
+      "conf": 0.62,
+      "ctx_level": 0.61,
+      "ctx_cp_post": 0.595,
+      "ctx_cp_pre": 0.59,
+      "middle": 0.565,
+      "random": 0.58,
+      "single_mean": 0.565
+    },
+    "Moving Count": {
+      "all": 0.465,
+      "blind": 0.28,
+      "single_best": 0.52,
+      "single_worst": 0.135,
+      "xi_encq": 0.295,
+      "xi_sal": 0.325,
+      "mass_encq": 0.31,
+      "motion": 0.355,
+      "dec_xi": 0.3,
+      "dec_mass": 0.36,
+      "conf": 0.31,
+      "ctx_level": 0.325,
+      "ctx_cp_post": 0.315,
+      "ctx_cp_pre": 0.33,
+      "middle": 0.34,
+      "random": 0.33,
+      "single_mean": 0.3184375
+    },
+    "Moving Direction": {
+      "all": 0.24,
+      "blind": 0.21,
+      "single_best": 0.385,
+      "single_worst": 0.215,
+      "xi_encq": 0.295,
+      "xi_sal": 0.305,
+      "mass_encq": 0.295,
+      "motion": 0.28,
+      "dec_xi": 0.26,
+      "dec_mass": 0.285,
+      "conf": 0.29,
+      "ctx_level": 0.295,
+      "ctx_cp_post": 0.315,
+      "ctx_cp_pre": 0.3,
+      "middle": 0.295,
+      "random": 0.31,
+      "single_mean": 0.2978125
+    },
+    "Object Existence": {
+      "all": 0.655,
+      "blind": 0.49,
+      "single_best": 0.865,
+      "single_worst": 0.44,
+      "xi_encq": 0.67,
+      "xi_sal": 0.67,
+      "mass_encq": 0.655,
+      "motion": 0.655,
+      "dec_xi": 0.65,
+      "dec_mass": 0.69,
+      "conf": 0.635,
+      "ctx_level": 0.65,
+      "ctx_cp_post": 0.655,
+      "ctx_cp_pre": 0.66,
+      "middle": 0.685,
+      "random": 0.7,
+      "single_mean": 0.6671875
+    },
+    "Object Interaction": {
+      "all": 0.8,
+      "blind": 0.295,
+      "single_best": 0.75,
+      "single_worst": 0.17,
+      "xi_encq": 0.525,
+      "xi_sal": 0.46,
+      "mass_encq": 0.485,
+      "motion": 0.49,
+      "dec_xi": 0.455,
+      "dec_mass": 0.455,
+      "conf": 0.615,
+      "ctx_level": 0.49,
+      "ctx_cp_post": 0.48,
+      "ctx_cp_pre": 0.465,
+      "middle": 0.505,
+      "random": 0.52,
+      "single_mean": 0.48875
+    },
+    "Object Shuffle": {
+      "all": 0.35,
+      "blind": 0.33,
+      "single_best": 0.53,
+      "single_worst": 0.23,
+      "xi_encq": 0.34,
+      "xi_sal": 0.335,
+      "mass_encq": 0.35,
+      "motion": 0.35,
+      "dec_xi": 0.33,
+      "dec_mass": 0.345,
+      "conf": 0.345,
+      "ctx_level": 0.345,
+      "ctx_cp_post": 0.35,
+      "ctx_cp_pre": 0.325,
+      "middle": 0.34,
+      "random": 0.34,
+      "single_mean": 0.349375
+    },
+    "Scene Transition": {
+      "all": 0.9,
+      "blind": 0.57,
+      "single_best": 0.8,
+      "single_worst": 0.385,
+      "xi_encq": 0.65,
+      "xi_sal": 0.635,
+      "mass_encq": 0.645,
+      "motion": 0.645,
+      "dec_xi": 0.65,
+      "dec_mass": 0.65,
+      "conf": 0.705,
+      "ctx_level": 0.65,
+      "ctx_cp_post": 0.65,
+      "ctx_cp_pre": 0.63,
+      "middle": 0.62,
+      "random": 0.645,
+      "single_mean": 0.6459375
+    },
+    "State Change": {
+      "all": 0.48,
+      "blind": 0.36,
+      "single_best": 0.59,
+      "single_worst": 0.23,
+      "xi_encq": 0.435,
+      "xi_sal": 0.395,
+      "mass_encq": 0.445,
+      "motion": 0.415,
+      "dec_xi": 0.38,
+      "dec_mass": 0.405,
+      "conf": 0.48,
+      "ctx_level": 0.405,
+      "ctx_cp_post": 0.435,
+      "ctx_cp_pre": 0.435,
+      "middle": 0.45,
+      "random": 0.44,
+      "single_mean": 0.425
+    },
+    "Unexpected Action": {
+      "all": 0.755,
+      "blind": 0.625,
+      "single_best": 0.655,
+      "single_worst": 0.285,
+      "xi_encq": 0.485,
+      "xi_sal": 0.485,
+      "mass_encq": 0.525,
+      "motion": 0.515,
+      "dec_xi": 0.5,
+      "dec_mass": 0.495,
+      "conf": 0.535,
+      "ctx_level": 0.49,
+      "ctx_cp_post": 0.49,
+      "ctx_cp_pre": 0.5,
+      "middle": 0.545,
+      "random": 0.495,
+      "single_mean": 0.5078125
+    }
+  },
+  "skipped": [
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C002P017R002A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C002P037R001A009_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C003P016R002A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S014C001P039R002A008_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C003P008R002A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S016C003P007R001A026_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S003C003P008R001A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C002P008R002A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S031C003P085R001A080_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C003P025R001A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C002P007R001A026_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C001P012R001A009_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S004C003P020R002A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C002P019R001A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C001P027R001A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C001P025R002A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P008R002A080_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C003P022R001A009_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C001P017R002A008_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C003P003R002A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C002P027R002A009_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C002P009R002A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S016C002P007R001A008_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C002P007R002A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S008C002P032R002A026_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C001P016R001A026_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C002P007R001A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C003P019R001A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C002P016R001A008_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S004C003P003R002A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C001P018R001A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C001P049R001A080_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C001P025R001A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C002P027R001A008_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C001P016R001A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C002P017R002A005_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C003P018R002A026_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C001P008R002A006_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S031C003P041R002A080_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C001P021R001A027_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C001P019R001A034_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S003C003P001R001A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S013C001P025R001A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C001P016R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S014C003P037R002A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C003P007R002A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C002P015R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S004C003P007R001A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C002P015R001A034_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S014C003P039R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C002P001R002A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C003P004R002A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S014C001P017R001A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C003P021R002A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S013C003P037R001A034_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C003P007R002A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C001P015R001A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C003P017R002A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C002P027R002A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C002P012R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C002P024R002A034_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S003C002P019R001A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C003P037R002A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S012C002P017R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C001P025R002A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C001P007R001A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C003P023R001A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C001P007R002A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C003P008R002A010_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C003P014R002A022_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C003P025R002A039_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C003P025R002A023_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C003P002R001A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P041R002A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C001P059R002A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C003P070R002A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S020C002P053R002A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C003P081R001A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C002P004R002A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S021C002P058R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C003P008R002A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P008R002A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S025C003P066R002A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C001P055R001A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P081R001A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C001P008R002A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C001P050R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S020C003P052R001A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P064R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P008R001A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C002P007R002A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C003P080R002A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C003P007R001A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C003P049R002A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C001P076R002A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S021C002P057R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P063R001A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C003P048R001A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C002P003R002A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P076R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P045R001A097_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C003P043R002A096_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S022C003P064R001A098_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C001P001R001A040_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S025C002P056R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C002P024R001A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S032C003P105R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C003P044R002A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S028C002P087R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P088R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C002P003R002A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S021C003P060R001A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C001P024R001A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C001P041R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S022C003P062R001A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S028C001P087R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S008C002P025R001A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C003P088R002A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C003P044R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C001P049R002A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C001P006R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C001P075R002A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C003P010R002A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P043R002A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C001P007R001A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C003P072R001A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S025C002P059R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C003P075R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C002P049R002A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C001P003R001A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C001P008R001A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S031C003P043R002A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P011R001A100_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S014C002P007R002A024_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C002P008R002A102_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S020C003P044R002A099_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C002P009R002A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C003P008R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S016C002P019R001A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C003P019R001A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C003P005R001A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C003P003R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C003P008R001A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C001P008R001A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C001P009R002A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S003C003P002R002A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S015C001P037R002A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S008C001P032R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C001P008R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C002P003R001A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S003C001P008R001A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S013C002P008R001A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C002P010R001A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C001P025R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S011C001P015R001A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C003P018R001A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S005C003P021R002A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S017C003P008R001A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S009C001P007R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C003P019R002A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S007C001P019R001A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S001C002P002R002A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S004C002P007R002A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S013C003P008R002A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S010C003P021R001A037_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C003P022R002A035_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S002C003P003R001A038_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S006C001P023R001A036_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P059R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C001P067R002A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P056R002A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C003P072R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S032C001P103R001A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S021C001P060R002A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C001P044R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C003P008R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C003P043R002A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P063R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S028C003P046R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S031C001P099R002A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S022C001P062R001A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C001P045R002A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C003P044R002A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S027C001P080R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S026C001P069R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C002P089R002A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S022C002P063R002A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S019C001P041R001A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S025C003P058R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S021C003P060R001A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S020C001P052R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S032C003P102R002A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P044R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P041R001A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S018C003P041R001A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P076R002A072_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S023C003P068R002A071_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S030C003P081R001A070_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S028C001P042R001A069_rgb.avi",
+      "reason": "missing file"
+    },
+    {
+      "task": "Fine-grained Pose",
+      "video": "S029C002P049R001A072_rgb.avi",
+      "reason": "missing file"
+    }
+  ]
+}

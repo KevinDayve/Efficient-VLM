@@ -21,6 +21,24 @@ attn_mid    top-K by attention averaged over the MID band (--mid_band, default l
             chosen because early attention is corruptible by sinks).
 attn_late   top-K by attention averaged over the LAST five layers (--late_band).
             Included as the "as late as a scorer could possibly be read" control.
+div_mid     the same MID-band attention score, but selected greedily under a Maximal
+            Marginal Relevance objective instead of by rank alone: at each step keep the
+            token maximising  lambda * s_i - (1 - lambda) * max_{j in kept} cos(e_i, e_j),
+            where s is the min-max normalised attention score and e is that token's merged
+            input embedding (--div_lambda, default 0.5). Same band, same score, same
+            budget as attn_mid -- the ONLY difference is the redundancy penalty, so the
+            div_mid - attn_mid gap is attributable to diversity and nothing else.
+            div_early / div_late do the same on the other two bands.
+            Rationale: raw top-K is free to spend the whole budget on one salient object
+            repeated across all 16 frames. The penalty makes a token that duplicates an
+            already-kept one cheap to skip, so the keep set buys coverage the way
+            uniform/uniform_stagger do, but chooses WHERE to cover by attention. This is
+            the DivPrune / CDPruner-style read.
+            Redundancy is measured in the projected LM embedding space (the same vectors
+            the pruned forwards consume), on features CENTERED per clip first
+            (--no-div_center opts out): LM embeddings are strongly anisotropic, so
+            uncentered cosines sit near a large common value and the penalty would be
+            near-constant -- i.e. it would silently collapse back to top-K.
 random      K visual tokens drawn uniformly at random (the distribution-free floor).
 uniform     K evenly spaced visual tokens, one per M/K block, midpoint of the block
             (a content-free but structured floor -- it buys coverage, not ranking).
@@ -77,6 +95,32 @@ Two consequences worth stating before a reviewer does:
     at which attn_early, attn_mid, attn_late, random and uniform are all the same
     operation -- which is the comparison this experiment exists to make.
 
+Where the prune happens  (--drop_after)
+---------------------------------------
+--drop_after L additionally runs EVERY selector with the same keep set deleted at the
+input of 0-indexed layer L instead of before layer 0: layers 0..L-1 run on the full
+sequence and the doomed tokens contribute their keys and values there, layers L..N-1 never
+see them. This is the FastV prune site, and the second bullet above is exactly the claim it
+puts a number on -- how much of what input-space pruning costs is bought back by letting
+the tokens live through the early layers first.
+
+The pair is controlled: same score, same ranking, same K, same tokens (the keep set is
+computed ONCE per (clip, selector, rho) and reused at every site, random draws included),
+same original position ids. Only the site differs, so the per-clip McNemar in
+`mcnemar_by_prune_site` is attributable to the site alone. --drop_after 0 IS the input drop
+and must reproduce the bare selector exactly -- a free correctness check on the mechanism.
+
+Read the gap with the compute in mind: the two sites are NOT iso-FLOP. The input drop saves
+the pruned tokens' cost in all N layers; --drop_after L saves it in only N-L. At L=16 of 28
+that is roughly 43% of the decoder rather than 100%, so a drop-after-16 curve sitting above
+an input-drop curve is a statement about where the information is read, not a better
+efficiency result. The layer-drop forward also costs FULL dense attention for layers 0..L-1,
+which makes it the expensive config in the sweep, not the cheap one.
+
+Applies to the mask as well as the states: the hooks slice the causal mask's rows and
+columns with the same ascending index list, so causality among the survivors is exactly
+what it was, and each surviving token keeps its original position id.
+
 Accuracy
 --------
 One forward per (clip, config); no generation. The prompt ends with "Best option:(" so
@@ -96,8 +140,11 @@ Cost
 ----
 n_clips x (1 + n_selectors x n_rhos + text_only) forwards. The dense one is eager-
 attention (the weights have to be materialised to be scored); the pruned ones are short.
-Defaults are 5 selectors x 5 rhos + the floor = 27 forwards/clip, and the floor is the
+Defaults are 6 selectors x 5 rhos + the floor = 32 forwards/clip, and the floor is the
 cheapest of them (no visual tokens at all), so use --max_samples for a first look.
+The div_* selectors add a greedy O(M x K x D) matvec loop per (clip, rho) on top of their
+forward -- GPU-side and small next to the forward itself, but it is the one selector whose
+cost grows with the keep rate.
 
 Run
 ---
@@ -115,6 +162,12 @@ Run
     python stage_topk_accuracy.py --data_root ~/Experiments/MVBench --tasks mvbench \
         --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
         --rhos --selectors --out floor_mvb_llavaov.json
+
+    # input-space drop vs. the FastV site: mid-band top-K, dropped before layer 0 and
+    # dropped after layer 16, on the same keep set
+    python stage_topk_accuracy.py --data_root ~/Experiments/EgoSchema --tasks EgoSchema \
+        --model_name llava-hf/llava-onevision-qwen2-7b-ov-hf --num_segments 16 \
+        --selectors attn_mid --drop_after 16 --out site_ego_llavaov.json
 """
 from __future__ import annotations
 
@@ -143,7 +196,10 @@ warnings.filterwarnings("ignore", message=".*video decoding and encoding capabil
 STAGE_DEFAULTS = {"early": ("0:6", "heaviest"),
                   "mid": ("11:15", "mean"),
                   "late": ("-5:-1", "mean")}
-DEFAULT_SELECTORS = ["attn_early", "attn_mid", "attn_late", "random", "uniform"]
+DEFAULT_SELECTORS = ["attn_early", "attn_mid", "attn_late", "div_mid", "random", "uniform"]
+# Every non-baseline selector is "<prefix>_<stage>": the prefix says how the stage's score
+# is turned into a keep set, the stage says which band the score is read from.
+SCORE_PREFIXES = ("attn", "bot", "div")
 BASELINE_SELECTORS = ["random", "uniform", "uniform_stagger"]  # This list is moot anyway because `is_baseline` is used to check for baseline selectors. Retained for the sake of posterity.
 
 
@@ -157,7 +213,18 @@ def _layer_index(tok: str, n_layers: int) -> int:
         raise ValueError(f"layer {tok} is outside a {n_layers}-layer stack")
     return i
 
+def variant_label(sel: str, site) -> str:
+    """A selector run at a prune site. site=None is the input-space drop and keeps the bare
+    selector name, so every config string this script has ever written stays valid."""
+    return sel if site is None else f"{sel}#L{site}"
+
+
+def base_selector(label: str) -> str:
+    return label.split("#", 1)[0]
+
+
 def is_baseline(s):
+    s = base_selector(s)
     return s.startswith("random") or s in ("uniform", "uniform_stagger")
 
 
@@ -332,10 +399,69 @@ def uniform_stagger(M: int, K: int, F: int) -> np.ndarray:
 
 
 
-def keep_local(selector: str, scores, M: int, K: int, rng, n_frames: int) -> np.ndarray:
+def div_features(embeds: torch.Tensor, visual_idx: torch.Tensor, center: bool) -> torch.Tensor:
+    """(M, D) unit-norm visual-token features, the space the MMR redundancy term lives in.
+
+    These are the MERGED INPUT embeddings -- the visual features already projected into the
+    LM's space, i.e. literally the vectors the pruned forwards consume. Cosine here is
+    therefore "would the model see these two tokens as the same thing on the way in", not a
+    similarity in some other encoder's space.
+
+    center: subtract the clip's mean visual embedding before normalising. LM embedding
+    clouds are anisotropic -- a large shared component makes every pairwise cosine sit near
+    the same high value, so the max-similarity penalty would be near-constant across
+    candidates and MMR would degenerate into plain top-K. Centering removes exactly that
+    component and leaves the part that distinguishes tokens. Done ONCE per clip: the same
+    features serve every keep rate, so the budgets are nested in the score, not in the
+    feature space."""
+    x = embeds[0, visual_idx.to(embeds.device)].float()
+    if center:
+        x = x - x.mean(dim=0, keepdim=True)
+    return torch.nn.functional.normalize(x, dim=1)
+
+
+def mmr_local(scores: np.ndarray, feats: torch.Tensor, K: int, lam: float) -> np.ndarray:
+    """Greedy Maximal Marginal Relevance over the visual tokens -> K local indices.
+
+        pick argmax_i  lam * s_i - (1 - lam) * max_{j in kept} cos(e_i, e_j)
+
+    s is min-max normalised to [0, 1] per clip so the two terms are on one scale and lam
+    means the same thing at every clip and every band; cos is left raw in [-1, 1]. The
+    first pick is the pure argmax of s (nothing is kept yet, so the penalty is undefined
+    rather than zero), which makes lam=1 exactly attn_* and lam=0 a pure coverage selector
+    seeded by the top-scoring token.
+
+    The running max-similarity vector is updated with only the newest pick each step, so
+    the full M x M gram matrix is never formed -- K matvecs of (M, D) @ (D,) instead."""
+    M = feats.shape[0]
+    K = int(min(K, M))
+    s = torch.as_tensor(np.ascontiguousarray(scores), dtype=torch.float32, device=feats.device)
+    lo, hi = s.min(), s.max()
+    s = (s - lo) / (hi - lo).clamp_min(1e-12)
+
+    chosen = torch.empty(K, dtype=torch.long, device=feats.device)
+    max_sim = torch.full((M,), -1.0, device=feats.device)
+    taken = torch.zeros(M, dtype=torch.bool, device=feats.device)
+    chosen[0] = last = int(torch.argmax(s).item())
+    taken[last] = True
+    for t in range(1, K):
+        max_sim = torch.maximum(max_sim, feats @ feats[last])
+        obj = lam * s - (1.0 - lam) * max_sim
+        obj[taken] = -float("inf")
+        chosen[t] = last = int(torch.argmax(obj).item())
+        taken[last] = True
+    return chosen.cpu().numpy()
+
+
+def keep_local(selector: str, scores, M: int, K: int, rng, n_frames: int,
+               feats: torch.Tensor | None = None, div_lambda: float = 0.5) -> np.ndarray:
     """Local indices (into the visual-token block) of the K tokens this selector keeps."""
     if selector.startswith("attn_"):
         return np.argsort(-scores, kind="stable")[:K]
+    if selector.startswith("div_"):
+        if feats is None:
+            raise RuntimeError(f"{selector} needs the visual-token features; none captured")
+        return mmr_local(scores, feats, K, div_lambda)
     if selector.startswith("bot_"):
         return np.argsort(scores, kind="stable")[:K]
     if selector == "random":
@@ -369,6 +495,84 @@ def keep_abs_idx(S: int, visual_idx: torch.Tensor, local: np.ndarray) -> torch.T
     keep[visual_idx[torch.as_tensor(np.ascontiguousarray(local), device=visual_idx.device,
                                     dtype=torch.long)]] = True
     return keep.nonzero(as_tuple=False).flatten()
+
+
+def attach_midforward_drop(model, layer_idx: int, keep_abs: torch.Tensor, S: int):
+    """Delete the pruned positions from the residual stream at the INPUT of layer
+    `layer_idx`, rather than before layer 0. Returns an uninstaller.
+
+    This is the FastV prune site: layers 0..layer_idx-1 run on the full sequence, so the
+    doomed visual tokens still contribute their keys and values there and the surviving
+    tokens have already absorbed some of them; from layer_idx on they are gone. It is the
+    strictly weaker intervention -- and the one real systems actually ship, because the
+    early layers are where the tokens are believed to be read.
+
+    Hooks go on EVERY layer from layer_idx up, not just layer_idx, because the decoder loop
+    hands `attention_mask`, `position_ids`, `cache_position` and `position_embeddings` to
+    each layer from ITS OWN full-length variables -- only `hidden_states` is threaded from
+    the previous layer's output. So layer_idx shortens the hidden states, and every layer
+    above it would otherwise get a full-length mask against a short sequence. Each tensor
+    is sliced only while it is still at full length S, which makes the hook idempotent down
+    the stack and keeps it working whether or not a given transformers version passes any
+    particular one of them.
+
+    Slicing rows and columns of the causal mask with the same ascending index list
+    preserves causality exactly (kept i attends kept j iff j <= i), and every surviving
+    token keeps its ORIGINAL position id -- same convention as the input-space drop, so the
+    two prune sites differ in the site and nothing else."""
+    text_model = text_model_of(model)
+    handles = []
+
+    def pre(module, args, kwargs):
+        if len(args) > 1:
+            raise RuntimeError(
+                "this transformers version passes decoder-layer arguments positionally; "
+                "the mid-forward drop slices them by keyword and would mis-slice them")
+        h = args[0] if args else kwargs.get("hidden_states")
+        kw = dict(kwargs)
+        kw.pop("hidden_states", None)
+        k_for = lambda t: keep_abs.to(t.device)
+
+        # hidden_states: full length only at the first hooked layer.
+        if h is not None and h.shape[1] == S:
+            h = h.index_select(1, k_for(h))
+        am = kw.get("attention_mask")
+        if am is not None and torch.is_tensor(am) and am.shape[-1] == S:
+            am = am.index_select(-1, k_for(am))
+            if am.dim() >= 3 and am.shape[-2] == S:      # 4D causal mask: -2 is the query axis
+                am = am.index_select(-2, k_for(am))
+            kw["attention_mask"] = am
+        for name in ("position_ids", "cache_position"):
+            t = kw.get(name)
+            if t is not None and t.shape[-1] == S:       # (B,S), (3,B,S) mRoPE, or (S,)
+                kw[name] = t.index_select(-1, k_for(t))
+        pe = kw.get("position_embeddings")
+        if pe is not None:                               # (cos, sin), seq axis is -2
+            kw["position_embeddings"] = tuple(
+                t.index_select(-2, k_for(t)) if t.shape[-2] == S else t for t in pe)
+        return (h,), kw
+
+    for layer in text_model.layers[layer_idx:]:
+        handles.append(layer.register_forward_pre_hook(pre, with_kwargs=True))
+    return lambda: [hd.remove() for hd in handles]
+
+
+@torch.no_grad()
+def predict_midforward(model, embeds, position_ids, keep_abs, letter_ids,
+                       layer_idx: int) -> int:
+    """The same prediction as predict_pruned, but with the drop applied at layer_idx
+    instead of at the input. The FULL sequence goes in -- the hooks do the deleting -- so
+    layers 0..layer_idx-1 cost what the dense forward costs. The kept set always contains
+    every text token, so the last position is still the answer slot."""
+    S = embeds.shape[1]
+    uninstall = attach_midforward_drop(model, layer_idx, keep_abs, S)
+    try:
+        out = model(inputs_embeds=embeds, position_ids=position_ids,
+                    attention_mask=torch.ones(1, S, dtype=torch.long, device=embeds.device),
+                    use_cache=False)
+    finally:
+        uninstall()
+    return int(torch.argmax(out.logits[0, -1][letter_ids]).item())
 
 
 @torch.no_grad()
@@ -453,23 +657,32 @@ def resolve_args(args):
     selectors = list(args.selectors)
     if args.include_bottom:
         selectors += [s.replace("attn_", "bot_") for s in selectors if s.startswith("attn_")]
-    # bad = [s for s in selectors
-    #        if not (s in BASELINE_SELECTORS
-    #                or (s.split("_", 1)[0] in ("attn", "bot") and s.split("_", 1)[-1] in STAGE_DEFAULTS))]
+    # The prefix must be checked too, not just the stage suffix: keep_local raises on an
+    # unknown selector from INSIDE the per-clip try, so a typo that slips through here is
+    # swallowed as a skip on every clip rather than reported once, up front.
     bad = [s for s in selectors if not (
-        is_baseline(s) or (s.split("_", 1)[-1] in STAGE_DEFAULTS)
+        is_baseline(s) or (s.split("_", 1)[0] in SCORE_PREFIXES
+                           and s.split("_", 1)[-1] in STAGE_DEFAULTS)
     )]
-    
+
     if bad:
         raise ValueError(f"unknown selectors {bad}; choices: "
-                         f"{[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}")
+                         f"{[f'{p}_{s}' for p in SCORE_PREFIXES for s in STAGE_DEFAULTS]}"
+                         f" + {BASELINE_SELECTORS}")
+    if not 0.0 <= args.div_lambda <= 1.0:
+        raise ValueError(f"--div_lambda must be in [0, 1], got {args.div_lambda}")
     return selectors
 
 
 def main(args):
     selectors = resolve_args(args)
     rhos = sorted(set(args.rhos))
-    configs = [f"{s}@{r:g}" for r in rhos for s in selectors]
+    # Prune sites. None = the input-space drop this script has always done; an integer L =
+    # the same keep set deleted at the input of layer L instead. Every selector runs at
+    # every site, so the site is a free axis alongside the selector and the keep rate.
+    sites = [None] + sorted(set(args.drop_after))
+    labels = [variant_label(s, site) for site in sites for s in selectors]
+    configs = [f"{lab}@{r:g}" for r in rhos for lab in labels]
     # Rho-independent references, carried through hits/per-task/per-sample exactly like
     # a config so nothing downstream has to special-case them: 'full' is the ceiling
     # (every visual token), 'text_only' the floor (none of them).
@@ -487,12 +700,23 @@ def main(args):
               for name in STAGE_DEFAULTS
               if any(s.endswith(f"_{name}") for s in selectors)}
 
+    bad_sites = [L for L in sites if L is not None and not 0 <= L < n_layers]
+    if bad_sites:
+        raise ValueError(f"--drop_after {bad_sites} outside a {n_layers}-layer stack "
+                         f"(0 = drop before layer 0, i.e. the input-space drop)")
+
     print(f"[model] {n_layers} decoder layers, {max_positions} LM positions")
     for name, (band, agg) in stages.items():
         print(f"[stage] {name:<5} layers {band[0]}-{band[-1]} ({len(band)}), agg={agg}")
-    print(f"[prune] input-space drop, original position ids kept, "
-          f"queries={args.queries}, budgets rho={rhos}")
+    print(f"[prune] original position ids kept, queries={args.queries}, budgets rho={rhos}")
+    print(f"[prune] sites: " + ", ".join("input (before layer 0)" if L is None
+                                         else f"layer {L} (layers 0-{L - 1} see everything)"
+                                         for L in sites))
     print(f"[prune] selectors: {selectors}  ->  {len(refs) + len(configs)} forwards/clip")
+    if any(s.startswith("div_") for s in selectors):
+        print(f"[div]   greedy MMR, lambda={args.div_lambda:g} "
+              f"(1=pure top-K, 0=pure coverage), features="
+              f"{'centred ' if args.div_center else ''}merged input embeddings")
     if args.text_only:
         print("[floor] text-only: one forward per clip with every visual token dropped")
     print(f"[data] tasks={args.tasks}  {args.num_segments} frames/clip")
@@ -560,6 +784,9 @@ def main(args):
                 scored = {name: stage_score(store, band, agg, args.k_frac)
                           for name, (band, agg) in stages.items()}
                 score_np = {name: s.numpy() for name, (s, _, _) in scored.items()}
+                # One feature matrix per clip, shared by every div_* selector and every rho.
+                feats = (div_features(embeds, visual_idx, args.div_center)
+                         if any(s.startswith("div_") for s in selectors) else None)
 
                 # ---- the floor: the same prune at K = 0, no visual tokens at all ----
                 preds, kept = {}, {}
@@ -576,10 +803,19 @@ def main(args):
                     for sel in selectors:
                         stage = sel.split("_", 1)[-1]
                         s = score_np.get(stage)
-                        local = keep_local(sel, s, M, K, rng, n_frames=args.num_segments)
+                        local = keep_local(sel, s, M, K, rng, n_frames=args.num_segments,
+                                           feats=feats, div_lambda=args.div_lambda)
+                        # ONE keep set, reused at every site: the sites are then compared
+                        # on the identical token subset (identical random draw included),
+                        # so the difference between them is the site alone.
                         keep_abs = keep_abs_idx(S, visual_idx, local)
-                        preds[f"{sel}@{r:g}"] = predict_pruned(model, embeds, pos,
-                                                               keep_abs, letter_ids)
+                        for site in sites:
+                            cfg = f"{variant_label(sel, site)}@{r:g}"
+                            preds[cfg] = (
+                                predict_pruned(model, embeds, pos, keep_abs, letter_ids)
+                                if site is None else
+                                predict_midforward(model, embeds, pos, keep_abs,
+                                                   letter_ids, site))
                     kept[f"{r:g}"] = K
             except Exception as e:
                 # A failure inside the dense forward leaves capture on; clear it here so a
@@ -609,7 +845,7 @@ def main(args):
                                                   if l is not None},
                                "pred_by_config": preds})
 
-            del inputs, embeds
+            del inputs, embeds, feats
             ctx.update({"embeds": None, "position_ids": None})   # ctx holds the GPU refs
             store.clear()
             if device.type == "cuda":
@@ -622,27 +858,57 @@ def main(args):
         return
 
     acc = {c: sum(hits[c]) / n_seen for c in refs + configs}
-    tests = [dict(rho=r, selector=a, baseline=b,
-                  delta_pts=100 * (acc[f"{a}@{r:g}"] - acc[f"{b}@{r:g}"]),
-                  **mcnemar(hits[f"{a}@{r:g}"], hits[f"{b}@{r:g}"]))
-             for r in rhos
+    # Ranked vs unranked, WITHIN a prune site -- comparing a top-K at one site against a
+    # random keep at another would confound the two axes.
+    tests = [dict(rho=r, site=site, selector=variant_label(a, site),
+                  baseline=variant_label(b, site),
+                  delta_pts=100 * (acc[f"{variant_label(a, site)}@{r:g}"]
+                                   - acc[f"{variant_label(b, site)}@{r:g}"]),
+                  **mcnemar(hits[f"{variant_label(a, site)}@{r:g}"],
+                            hits[f"{variant_label(b, site)}@{r:g}"]))
+             for r in rhos for site in sites
              for a in selectors if not is_baseline(a)
              for b in selectors if is_baseline(b)]
+    # The prune-site comparison: same selector, same rho, same keep set, dropped mid-stack
+    # instead of at the input. This is the whole point of --drop_after.
+    site_tests = [dict(rho=r, selector=base, drop_after=L,
+                       delta_pts=100 * (acc[f"{variant_label(base, L)}@{r:g}"]
+                                        - acc[f"{base}@{r:g}"]),
+                       **mcnemar(hits[f"{variant_label(base, L)}@{r:g}"],
+                                 hits[f"{base}@{r:g}"]))
+                  for r in rhos for L in sites if L is not None
+                  for base in selectors]
+    # The test each div_* selector exists to pass: same band, same score, same budget as
+    # its attn_* twin, with the redundancy penalty the single difference between them. Its
+    # margin over random/uniform is inherited from the ranking; this is the part that is
+    # the diversity's own.
+    div_tests = [dict(rho=r, selector=a, baseline=b,
+                      delta_pts=100 * (acc[f"{a}@{r:g}"] - acc[f"{b}@{r:g}"]),
+                      **mcnemar(hits[f"{a}@{r:g}"], hits[f"{b}@{r:g}"]))
+                 for r in rhos
+                 for a in labels if a.startswith("div_")
+                 for b in [a.replace("div_", "attn_", 1)] if b in labels]
     # Against the floor, EVERY selector is on trial -- the unranked ones included. A
     # keep rate at which random is no better than blind is a keep rate at which the
     # benchmark, not the selector, is doing the answering.
     floor_tests = [dict(rho=r, selector=a, baseline="text_only",
                         delta_pts=100 * (acc[f"{a}@{r:g}"] - acc["text_only"]),
                         **mcnemar(hits[f"{a}@{r:g}"], hits["text_only"]))
-                   for r in rhos for a in selectors] if args.text_only else []
+                   for r in rhos for a in labels] if args.text_only else []
 
-    out = {"experiment": "stage_topk_accuracy", "prune": "input_drop_visual_tokens",
+    out = {"experiment": "stage_topk_accuracy",
+           "prune": ("input_drop_visual_tokens" if sites == [None]
+                     else "input_drop_visual_tokens + midforward_drop"),
            "backbone": args.backbone, "model_name": args.model_name,
            "data_root": args.data_root, "tasks": args.tasks,
            "num_segments": args.num_segments, "max_pixels": args.max_pixels,
            "min_pixels": args.min_pixels, "n_layers": n_layers,
            "queries": args.queries, "estimator": "moment", "k_frac": args.k_frac,
            "seed": args.seed, "rhos": rhos, "selectors": selectors,
+           "prune_sites": sites, "variants": labels,
+           "drop_after": sorted(set(args.drop_after)),
+           "div_lambda": args.div_lambda, "div_center": args.div_center,
+           "div_features": "merged_input_embeddings",
            "stages": {n: {"layers": b, "agg": a} for n, (b, a) in stages.items()},
            "scoring": "argmax over option-letter tokens", "answer_prefix": ANSWER_PREFIX,
            "n_clips": n_seen, "full_accuracy": acc["full"],
@@ -650,10 +916,10 @@ def main(args):
            "text_only_accuracy": acc.get("text_only"),
            "chance_accuracy": (sum(1.0 / s["n_options"] for s in per_sample) / n_seen),
            "accuracy_by_config": acc,
-           "accuracy_by_rho": {f"{r:g}": {s: acc[f"{s}@{r:g}"] for s in selectors} for r in rhos},
+           "accuracy_by_rho": {f"{r:g}": {s: acc[f"{s}@{r:g}"] for s in labels} for r in rhos},
            "retention_by_rho": {f"{r:g}": {s: (acc[f"{s}@{r:g}"] / acc["full"]
                                                if acc["full"] > 0 else float("nan"))
-                                           for s in selectors} for r in rhos},
+                                           for s in labels} for r in rhos},
            # Where a budget sits on the floor -> ceiling scale: 0 = the video bought it
            # nothing over answering blind, 1 = it kept everything the video was worth.
            # Undefined (nan) when the video buys the model nothing to begin with.
@@ -661,9 +927,11 @@ def main(args):
                                                   / (acc["full"] - acc["text_only"])
                                                   if acc["full"] != acc["text_only"]
                                                   else float("nan"))
-                                              for s in selectors} for r in rhos}
+                                              for s in labels} for r in rhos}
                                   if args.text_only else None),
            "mcnemar": tests,
+           "mcnemar_by_prune_site": site_tests,
+           "mcnemar_div_vs_attn": div_tests,
            "mcnemar_vs_text_only": floor_tests,
            "mcnemar_full_vs_text_only": (dict(selector="full", baseline="text_only",
                                               delta_pts=100 * (acc["full"] - acc["text_only"]),
@@ -687,17 +955,32 @@ def main(args):
         print(f"text only (0 tokens) accuracy = {acc['text_only']:.4f}   <- floor, "
               f"the video is worth {ft['delta_pts']:+.2f} pts (p={ft['p_value']:.3g})")
     print(f"chance (1/n_options)         = {out['chance_accuracy']:.4f}\n")
-    print(f"{'rho':>6} " + " ".join(f"{s:>12s}" for s in selectors))
+    w = max(13, max((len(s) for s in labels), default=13))
+    print(f"{'rho':>6} " + " ".join(f"{s:>{w}s}" for s in labels))
     for r in rhos:
-        print(f"{r:>6g} " + " ".join(f"{100 * acc[f'{s}@{r:g}']:11.1f}%" for s in selectors))
+        print(f"{r:>6g} " + " ".join(f"{100 * acc[f'{s}@{r:g}']:{w - 1}.1f}%" for s in labels))
     if args.text_only:
-        print(f"{'blind':>6} " + " ".join(f"{100 * acc['text_only']:11.1f}%" for _ in selectors))
+        print(f"{'blind':>6} " + " ".join(f"{100 * acc['text_only']:{w - 1}.1f}%" for _ in labels))
+    if site_tests:
+        print("\nMcNemar, prune site (same selector, same keep set, dropped later):")
+        for t in site_tests:
+            flag = "significant" if t["p_value"] < 0.05 else "n.s."
+            print(f"  rho={t['rho']:<5g} {t['selector']:>10s}  L{t['drop_after']} vs input "
+                  f"{t['delta_pts']:+6.2f} pts  (b={t['b']:>4d} c={t['c']:>4d}, "
+                  f"p={t['p_value']:.3g}, {flag})")
     print("\nMcNemar (exact, two-sided) against the unranked floors:")
     for t in tests:
         flag = "significant" if t["p_value"] < 0.05 else "n.s."
-        print(f"  rho={t['rho']:<5g} {t['selector']:>10s} - {t['baseline']:<8s} "
+        print(f"  rho={t['rho']:<5g} {t['selector']:>14s} - {t['baseline']:<14s} "
               f"{t['delta_pts']:+6.2f} pts  (b={t['b']:>4d} c={t['c']:>4d}, "
               f"p={t['p_value']:.3g}, {flag})")
+    if div_tests:
+        print("\nMcNemar, diversity against its own ranking (does the penalty pay for itself?):")
+        for t in div_tests:
+            flag = "significant" if t["p_value"] < 0.05 else "n.s."
+            print(f"  rho={t['rho']:<5g} {t['selector']:>14s} - {t['baseline']:<14s} "
+                  f"{t['delta_pts']:+6.2f} pts  (b={t['b']:>4d} c={t['c']:>4d}, "
+                  f"p={t['p_value']:.3g}, {flag})")
     if floor_tests:
         print("\nMcNemar against the text-only floor (does this budget beat seeing nothing?):")
         for t in floor_tests:
@@ -727,10 +1010,16 @@ def main(args):
         import matplotlib.pyplot as plt
         plt.figure(figsize=(7, 4))
         xs = np.array(rhos, dtype=float)
-        for i, s in enumerate(selectors):
-            ys = np.array([100 * acc[f"{s}@{r:g}"] for r in rhos])
-            style = "--" if s in BASELINE_SELECTORS else "-"
-            plt.plot(100 * xs, ys, style, marker="o", ms=4, color=f"C{i}", label=s)
+        # Colour carries the selector and linestyle carries the prune site, so a selector's
+        # two sites sit on one colour and the gap between them is the thing you read.
+        for i, sel in enumerate(selectors):
+            for site in sites:
+                lab = variant_label(sel, site)
+                ys = np.array([100 * acc[f"{lab}@{r:g}"] for r in rhos])
+                plt.plot(100 * xs, ys, "-" if site is None else "-.",
+                         marker="o" if site is None else "s", ms=4, color=f"C{i}",
+                         lw=1.2 if is_baseline(lab) else 1.8,
+                         alpha=0.65 if is_baseline(lab) else 1.0, label=lab)
         plt.axhline(100 * acc["full"], color="gray", lw=0.8, ls=":", label="no pruning")
         if args.text_only:
             # The floor closes the band: anything between this line and the ceiling is
@@ -765,8 +1054,29 @@ def parse_args():
                         "values to skip the sweep entirely (floor + ceiling only).")
     p.add_argument("--n_random", type=int, default=5, help="Independent random keeps per clip.")
     p.add_argument("--selectors", nargs="*", default=DEFAULT_SELECTORS,
-                   help=f"any of {[f'attn_{s}' for s in STAGE_DEFAULTS] + BASELINE_SELECTORS}. "
+                   help=f"any of "
+                        f"{[f'{p_}_{s}' for p_ in SCORE_PREFIXES for s in STAGE_DEFAULTS]}"
+                        f" + {BASELINE_SELECTORS}. attn_* = top-K by the band's score, "
+                        f"bot_* = bottom-K, div_* = the same score under greedy MMR "
+                        f"(top-K with a redundancy penalty). "
                         f"Pass with no values to run no selectors at all.")
+    p.add_argument("--drop_after", type=int, nargs="*", default=[], metavar="LAYER",
+                   help="ALSO run every selector with the drop applied at the input of "
+                        "0-indexed LAYER instead of before layer 0 -- the FastV prune site: "
+                        "layers 0..LAYER-1 still see every visual token, LAYER onward do "
+                        "not. Same score, same keep set, same budget as the input-space "
+                        "run, so the pair isolates the site. Repeatable. --drop_after 0 is "
+                        "the input drop itself and is a useful self-check (it must "
+                        "reproduce the bare selector exactly). Default: input drop only.")
+    p.add_argument("--div_lambda", type=float, default=0.5,
+                   help="div_* only: weight on the attention score against the redundancy "
+                        "penalty, lam*score - (1-lam)*max cosine to an already-kept token. "
+                        "1.0 reproduces attn_* exactly, 0.0 is pure coverage (default 0.5).")
+    p.add_argument("--div_center", action=argparse.BooleanOptionalAction, default=True,
+                   help="div_* only: centre the visual embeddings on the clip mean before "
+                        "cosine. On by default -- uncentred LM embeddings are anisotropic "
+                        "enough that the penalty goes near-constant and MMR collapses to "
+                        "plain top-K.")
     p.add_argument("--include_bottom", action="store_true",
                    help="also run bottom-K by each attention score -- the control that says "
                         "whether the ranking carries any usable order at all.")

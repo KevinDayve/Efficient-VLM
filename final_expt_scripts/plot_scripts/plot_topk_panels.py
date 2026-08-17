@@ -16,6 +16,14 @@ even in greyscale:
     dashed   random / uniform floors  (unranked baselines)
     dash-dot attention bottom-K       (anti-oracle, the other end of the ranking)
 
+The diversity selectors (`div_*`: the same band's attention score selected greedily
+under an MMR redundancy penalty) are solid too -- they are the method, not a floor --
+but carry a square marker instead of a circle, because the comparison they exist for
+is div_mid against attn_mid on the same panel and that pair has to be separable
+without reading the legend. A div sweep is usually its own JSON rather than extra
+columns in the top-K one, so it is folded into a panel with --extra_llava_ego and
+friends, under the same same-model/benchmark/clips check the floors get.
+
 The no-pruning ceiling is per panel -- it is a property of the model/benchmark
 pair, not of a selector -- so it stays a grey dotted line inside each panel,
 labelled with its own value rather than pushed into the shared legend. The
@@ -27,7 +35,11 @@ key and lose the line -- but the floor is a property of the model/benchmark pair
 not of the sweep, so it can also be measured on its own (a rho-less
 stage_topk_accuracy.py run with --text_only) and attached to a panel with
 --floor_llava_ego and friends. Such a sidecar must come from the same model,
-benchmark and clip set as the sweep it decorates, which is checked, not assumed.
+benchmark, clip set and (on Qwen) per-frame pixel budget as the sweep it decorates,
+which is checked, not assumed -- see SETTING_KEYS. A mismatch is fatal, because a
+curve measured under a different setting is read off this figure as if it shared the
+panel's; --allow_drift downgrades that to a warning and stamps the panel with what
+differs, for a mismatch you know about and intend to show.
 
 y axes are shared per ROW by default: the same benchmark on two backbones is the
 comparison worth making pixel-for-pixel, while EgoSchema and MVBench sit at
@@ -42,7 +54,21 @@ Run
     python final_expt_scripts/plot_scripts/plot_topk_panels.py --y retention --out topk_panels_retention.png
     python final_expt_scripts/plot_scripts/plot_topk_panels.py \
         --floor_llava_ego final_expt_results/topk_accuracy/floor_ego_llavaov.json \
+        --extra_llava_ego final_expt_results/topk_accuracy/div_ego_llavaov.json \
         --out final_expt_results/topk_accuracy/topk_panels.png final_expt_results/topk_accuracy/topk_panels.pdf
+
+The four sweeps, four floors and two div overlays are the defaults, so the figure as
+committed is just
+
+    python final_expt_scripts/plot_scripts/plot_topk_panels.py --allow_drift \
+        --out final_expt_results/topk_accuracy/topk_panels.png final_expt_results/topk_accuracy/topk_panels.pdf
+
+where --allow_drift is currently carrying exactly one known mismatch: div_ego_qwen.json
+was swept at native per-frame resolution while topk_ego_qwen.json used
+--max_pixels/--min_pixels 200704, so its div_mid curve sits on a different unpruned
+model (62.9% vs the panel's 61.0%) and can cross the panel's ceiling without that
+meaning anything. Re-running that sweep with the clamp removes both the flag and the
+stamp.
 """
 from __future__ import annotations
 
@@ -58,20 +84,27 @@ from matplotlib.lines import Line2D
 
 RESULTS = "final_expt_results/topk_accuracy"
 
-# One colour + line style per SELECTOR, fixed across every panel, so a colour
-# always means the selector and never the model or the benchmark. Colours keep
-# the C0..C6 order the per-run plots in stage_topk_accuracy.py already use, so
-# these panels and the single-run PNGs stay readable side by side.
-STYLE = {"attn_early":      ("C0", "-"),
-         "attn_mid":        ("C1", "-"),
-         "random":          ("C2", "--"),
-         "uniform":         ("C3", "--"),
-         "uniform_stagger": ("C4", "--"),
-         "bot_early":       ("C5", "-."),
-         "bot_mid":         ("C6", "-.")}
+# One colour + line style + marker per SELECTOR, fixed across every panel, so a
+# colour always means the selector and never the model or the benchmark. Colours
+# keep the C0..C6 order the per-run plots in stage_topk_accuracy.py already use, so
+# these panels and the single-run PNGs stay readable side by side; the div_*
+# entries continue past C6 and take a square marker (see the module docstring).
+STYLE = {"attn_early":      ("C0", "-",  "o"),
+         "attn_mid":        ("C1", "-",  "o"),
+         "div_early":       ("C8", "-",  "s"),
+         "div_mid":         ("C9", "-",  "s"),
+         "random":          ("C2", "--", "o"),
+         "uniform":         ("C3", "--", "o"),
+         "uniform_stagger": ("C4", "--", "o"),
+         "bot_early":       ("C5", "-.", "o"),
+         "bot_mid":         ("C6", "-.", "o")}
+
+DEFAULT_STYLE = (None, "-", "o")
 
 PRETTY_SELECTOR = {"attn_early":      "attn top-K (early)",
                    "attn_mid":        "attn top-K (mid)",
+                   "div_early":       "attn + MMR diversity (early)",
+                   "div_mid":         "attn + MMR diversity (mid)",
                    "random":          "random",
                    "uniform":         "uniform",
                    "uniform_stagger": "uniform (staggered)",
@@ -110,6 +143,79 @@ def blind_pct(meta):
     return None if v is None else 100 * v
 
 
+# Everything that has to match for a sidecar's numbers to mean the same thing as the
+# panel's. max_pixels/min_pixels are in here because on Qwen they set the per-frame
+# resolution and therefore n_visual_tokens: a sweep run with the clamp and a sidecar
+# run without it decode different inputs, which moves the unpruned accuracy by more
+# than the token budget does and makes the curves incomparable even though the model,
+# benchmark and clip list all match.
+SETTING_KEYS = ("model_name", "tasks", "n_clips", "num_segments",
+                "max_pixels", "min_pixels")
+
+
+def check_same_setting(side, meta, path: str, strict: bool = True):
+    """Check that `side` (a sidecar JSON) is the same run setting as the panel it would
+    decorate; return the list of human-readable mismatches.
+
+    Fatal by default -- a curve measured under a different setting drawn on this panel
+    is read as if it were measured under the panel's, which is the one failure mode
+    these panels cannot survive. `strict=False` (--allow_drift) downgrades it to a
+    warning for the case where the mismatch is known and the panel is going to be
+    stamped with it, so it is on the figure rather than only in the shell.
+
+    full_accuracy is never fatal -- it is a re-decode of the same unpruned model and
+    can move a clip or two -- so it warns on its own, but a large gap is the symptom
+    that one of the SETTING_KEYS above should have caught and did not."""
+    drift = [f"{key} {side.get(key)!r} vs {meta.get(key)!r}"
+             for key in SETTING_KEYS if side.get(key) != meta.get(key)]
+    if drift and strict:
+        raise SystemExit(f"{path}: {'; '.join(drift)}. This is not the same setting as "
+                         f"the sweep it would decorate -- re-run it to match, or pass "
+                         f"--allow_drift to plot it anyway with the panel stamped.")
+    if drift:
+        print(f"warning: {path} differs from the sweep it decorates: {'; '.join(drift)}.")
+
+    delta = 100 * (side["full_accuracy"] - meta["full_accuracy"])
+    if abs(delta) > 0.05:
+        print(f"warning: {path} full_accuracy differs from the sweep's by "
+              f"{delta:+.1f} pts; keeping the sweep's ceiling.")
+    return drift
+
+
+def attach_extra(run, path: str, strict: bool = True):
+    """Fold a second sweep's selector curves into `run`'s panel, in place.
+
+    The diversity selectors were swept separately from the top-K ones, so div_mid
+    lives in its own JSON. Overlaying it is only worth doing if it is the same
+    comparison -- same model, benchmark, clips and rho grid -- so all of that is
+    checked rather than assumed, and a selector the panel already has is refused
+    instead of silently overwriting the curve it is meant to be compared against.
+
+    The rho grid stays fatal even under --allow_drift: a curve plotted against x
+    values it was not measured at is not a caveat, it is a wrong line."""
+    if run is None:
+        raise SystemExit(f"{path}: extra run given for a panel that has no run.")
+    xs, curves, meta = run
+    xs_x, curves_x, extra = load_run(path)
+    drift = check_same_setting(extra, meta, path, strict=strict)
+    if len(xs_x) != len(xs) or not np.allclose(xs_x, xs):
+        raise SystemExit(f"{path}: rhos are {list(xs_x)} but the sweep it would "
+                         f"decorate has {list(xs)}.")
+
+    for s in extra["selectors"]:
+        if s in curves:
+            raise SystemExit(f"{path}: selector {s!r} is already in the panel's sweep.")
+        curves[s] = curves_x[s]
+        meta["selectors"].append(s)
+
+    # A drifted overlay carries its own no-pruning accuracy, which is the number its
+    # curve should be read against -- not the panel's ceiling line. Keep both the
+    # mismatch and that accuracy so the panel can print them where the curve is.
+    if drift:
+        meta.setdefault("_drift", []).append(
+            (os.path.basename(path), drift, 100 * extra["full_accuracy"]))
+
+
 def attach_floor(run, path: str):
     """Fold a standalone text-only run's floor into `run`'s meta, in place.
 
@@ -125,18 +231,10 @@ def attach_floor(run, path: str):
     with open(path) as fh:
         floor = json.load(fh)
 
-    for key in ("model_name", "tasks", "n_clips", "num_segments"):
-        if floor.get(key) != meta.get(key):
-            raise SystemExit(f"{path}: {key} is {floor.get(key)!r} but the sweep it "
-                             f"would decorate has {meta.get(key)!r}.")
+    check_same_setting(floor, meta, path)
     blind = blind_pct(floor)
     if blind is None:
         raise SystemExit(f"{path}: no text_only_accuracy to attach.")
-
-    delta = 100 * (floor["full_accuracy"] - meta["full_accuracy"])
-    if abs(delta) > 0.05:
-        print(f"warning: {path} full_accuracy differs from the sweep's by "
-              f"{delta:+.1f} pts; keeping the sweep's ceiling.")
     meta["text_only_accuracy"] = floor["text_only_accuracy"]
 
 
@@ -147,8 +245,8 @@ def draw_panel(ax, run, args):
     scale = (100 / full) if args.y == "retention" else 1.0
 
     for s in meta["selectors"]:
-        color, ls = STYLE.get(s, (None, "-"))
-        ax.plot(xs, scale * curves[s], ls, marker="o", ms=4, lw=1.6, color=color)
+        color, ls, marker = STYLE.get(s, DEFAULT_STYLE)
+        ax.plot(xs, scale * curves[s], ls, marker=marker, ms=4, lw=1.6, color=color)
 
     ceiling = 100.0 if args.y == "retention" else full
     ax.axhline(ceiling, **CEILING)
@@ -179,6 +277,24 @@ def panel_note(meta) -> str:
     return f"{task}  n={meta['n_clips']}  {meta['num_segments']}f"
 
 
+def drift_note(meta) -> str | None:
+    """Top-left stamp naming any overlay that is NOT the panel's setting.
+
+    Only reachable under --allow_drift. It names the file, what differs and the
+    overlay's own no-pruning accuracy, because that last number is what its curve
+    has to be read against -- the panel's dotted ceiling belongs to the sweep, and
+    an overlay from a different setting can sit above it without meaning anything."""
+    entries = meta.get("_drift")
+    if not entries:
+        return None
+    lines = []
+    for name, diffs, full in entries:
+        lines.append(f"! {name} is a different setting:")
+        lines += [f"    {d}" for d in diffs]
+        lines.append(f"    its own no pruning: {full:.1f}%")
+    return "\n".join(lines)
+
+
 def headroom(ax, frac=0.10, foot=0.06):
     """Pad the y range so the ceiling label above its line and the floor label below
     its line both have room."""
@@ -195,10 +311,17 @@ def main(args):
     if all(r is None for row in runs for r in row):
         raise SystemExit("nothing to plot: all four runs were 'none'.")
 
+    # Extra selector curves first, so a panel's ceiling/floor checks and its y range
+    # both see the full set of curves that will be drawn on it.
+    extras = [[args.extra_llava_ego, args.extra_qwen_ego],
+              [args.extra_llava_mvb, args.extra_qwen_mvb]]
     floors = [[args.floor_llava_ego, args.floor_qwen_ego],
               [args.floor_llava_mvb, args.floor_qwen_mvb]]
     for r in range(2):
         for c in range(2):
+            for path in extras[r][c]:
+                if path.lower() != "none":
+                    attach_extra(runs[r][c], path, strict=not args.allow_drift)
             path = floors[r][c]
             if path.lower() != "none":
                 attach_floor(runs[r][c], path)
@@ -225,6 +348,16 @@ def main(args):
                               else "accuracy (%)")
             ax.annotate(panel_note(meta), xy=(0.98, 0.03), xycoords="axes fraction",
                         ha="right", va="bottom", fontsize=8, color="0.35")
+            # Top-left: the one corner no curve, ceiling label or floor label uses
+            # on these panels, and boxed so it stays readable if a future run puts
+            # one there anyway.
+            note = None if args.no_drift_note else drift_note(meta)
+            if note:
+                ax.annotate(note, xy=(0.02, 0.97), xycoords="axes fraction",
+                            ha="left", va="top", fontsize=6.5, color="0.15",
+                            linespacing=1.4,
+                            bbox=dict(boxstyle="round,pad=0.35", fc="white",
+                                      ec="0.6", lw=0.6, alpha=0.9))
 
     # Shared axes propagate set_ylim, so lift once per shared group -- doing it
     # per panel would stack the margin two (or four) times over.
@@ -243,8 +376,9 @@ def main(args):
     # than from whichever panel happened to be drawn first.
     order = [s for s in STYLE if any(run and s in run[2]["selectors"]
                                      for row in runs for run in row)]
-    handles = [Line2D([], [], color=STYLE[s][0], ls=STYLE[s][1], marker="o", ms=4,
-                      lw=1.6, label=s if args.raw_labels else PRETTY_SELECTOR.get(s, s))
+    handles = [Line2D([], [], color=STYLE[s][0], ls=STYLE[s][1], marker=STYLE[s][2],
+                      ms=4, lw=1.6,
+                      label=s if args.raw_labels else PRETTY_SELECTOR.get(s, s))
                for s in order]
     handles.append(Line2D([], [], label="no pruning (per panel)", **CEILING))
     if not args.no_floor and any(run and blind_pct(run[2]) is not None
@@ -279,6 +413,14 @@ def parse_args():
     p.add_argument("--floor_llava_mvb", default=f"{RESULTS}/floor_mvb_llavaov.json")
     p.add_argument("--floor_qwen_ego", default=f"{RESULTS}/floor_ego_qwen.json")
     p.add_argument("--floor_qwen_mvb", default=f"{RESULTS}/floor_mvb_qwen.json")
+    # Selectors swept separately from the main top-K run (the div_* sweeps) are
+    # overlaid on their panel from their own JSON; repeat the flag for more than one.
+    p.add_argument("--extra_llava_ego", nargs="+", default=[f"{RESULTS}/div_ego_llavaov.json"],
+                   help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
+    p.add_argument("--extra_llava_mvb", nargs="+", default=["none"])
+    p.add_argument("--extra_qwen_ego", nargs="+", default=[f"{RESULTS}/div_ego_qwen.json"],
+                   help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
+    p.add_argument("--extra_qwen_mvb", nargs="+", default=["none"])
     p.add_argument("--y", choices=["accuracy", "retention"], default="accuracy",
                    help="retention = accuracy / that panel's no-pruning accuracy.")
     p.add_argument("--share_y", choices=["row", "all", "none"], default="row",
@@ -287,6 +429,15 @@ def parse_args():
                    help="legend uses the bare selector names from the JSON.")
     p.add_argument("--no_floor", action="store_true",
                    help="hide the text-only floor line even where a run measured one.")
+    p.add_argument("--no_drift_note", action="store_true",
+                   help="hide the in-panel --allow_drift stamp. The mismatch is still "
+                        "printed to stderr on every run; the figure just stops "
+                        "carrying it, so say it in the caption instead.")
+    p.add_argument("--allow_drift", action="store_true",
+                   help="plot an --extra_* overlay whose setting does not match the "
+                        "panel's, stamping the panel with what differs, instead of "
+                        "refusing it. For a known mismatch you intend to show; the "
+                        "curve is not comparable to the panel's other curves.")
     p.add_argument("--legend_ncol", type=int, default=4)
     p.add_argument("--legend_space", type=float, default=0.075,
                    help="figure fraction reserved at the bottom for the legend.")

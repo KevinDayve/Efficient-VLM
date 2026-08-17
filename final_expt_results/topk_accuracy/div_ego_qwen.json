@@ -1,0 +1,148 @@
+{
+  "experiment": "stage_topk_accuracy",
+  "prune": "input_drop_visual_tokens",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "data_root": "../datasets/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 16,
+  "max_pixels": null,
+  "min_pixels": null,
+  "n_layers": 28,
+  "queries": "post",
+  "estimator": "moment",
+  "k_frac": 0.1,
+  "seed": 0,
+  "rhos": [
+    0.01,
+    0.05,
+    0.1,
+    0.25,
+    0.5
+  ],
+  "selectors": [
+    "div_mid"
+  ],
+  "div_lambda": 0.5,
+  "div_center": true,
+  "div_features": "merged_input_embeddings",
+  "stages": {
+    "mid": {
+      "layers": [
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "agg": "mean"
+    }
+  },
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 499,
+  "full_accuracy": 0.6292585170340681,
+  "text_only": false,
+  "text_only_accuracy": null,
+  "chance_accuracy": 0.2,
+  "accuracy_by_config": {
+    "full": 0.6292585170340681,
+    "div_mid@0.01": 0.5250501002004008,
+    "div_mid@0.05": 0.5871743486973948,
+    "div_mid@0.1": 0.6012024048096193,
+    "div_mid@0.25": 0.6052104208416834,
+    "div_mid@0.5": 0.627254509018036
+  },
+  "accuracy_by_rho": {
+    "0.01": {
+      "div_mid": 0.5250501002004008
+    },
+    "0.05": {
+      "div_mid": 0.5871743486973948
+    },
+    "0.1": {
+      "div_mid": 0.6012024048096193
+    },
+    "0.25": {
+      "div_mid": 0.6052104208416834
+    },
+    "0.5": {
+      "div_mid": 0.627254509018036
+    }
+  },
+  "retention_by_rho": {
+    "0.01": {
+      "div_mid": 0.8343949044585988
+    },
+    "0.05": {
+      "div_mid": 0.9331210191082804
+    },
+    "0.1": {
+      "div_mid": 0.9554140127388536
+    },
+    "0.25": {
+      "div_mid": 0.961783439490446
+    },
+    "0.5": {
+      "div_mid": 0.9968152866242038
+    }
+  },
+  "above_floor_by_rho": null,
+  "mcnemar": [],
+  "mcnemar_div_vs_attn": [],
+  "mcnemar_vs_text_only": [],
+  "mcnemar_full_vs_text_only": null,
+  "heaviest_layer_histogram": {},
+  "visual_attention_mass_by_layer": [
+    0.05871611779820704,
+    0.05899898044555961,
+    0.06101162637582045,
+    0.056923557270713944,
+    0.032030980559980465,
+    0.0363297951118442,
+    0.03346327809852087,
+    0.03435642889631774,
+    0.0555380375790811,
+    0.09328206925688383,
+    0.05088872513649817,
+    0.0561909805050116,
+    0.06557770988685574,
+    0.08494021036552045,
+    0.09837044955404822,
+    0.05711450129896701,
+    0.08072662405027656,
+    0.051985519559296194,
+    0.045748669725053294,
+    0.07198191883568773,
+    0.05507111864048756,
+    0.06714531036470839,
+    0.05395183323290879,
+    0.05038718547754154,
+    0.0465086235334436,
+    0.04825516172007234,
+    0.062156843364925565,
+    0.07740296392080062
+  ],
+  "per_task_seen": {
+    "EgoSchema": 499
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.6292585170340681,
+      "div_mid@0.01": 0.5250501002004008,
+      "div_mid@0.05": 0.5871743486973948,
+      "div_mid@0.1": 0.6012024048096193,
+      "div_mid@0.25": 0.6052104208416834,
+      "div_mid@0.5": 0.627254509018036
+    }
+  },
+  "skipped": [
+    {
+      "task": "EgoSchema",
+      "video": "ece69b04-2e67-434a-b923-1329feed590d.mp4",
+      "reason": "OutOfMemoryError: CUDA out of memory. Tried to allocate 1.37 GiB. GPU 0 has a total capacity of 47.41 GiB of which 219.62 MiB is free. Process 3922601 has 21.54 GiB memory in use. Including non-PyTorch memory, this process has 5.80 GiB memory in use. Process 2936811 has 19.84 GiB memory in use. Of the allocated memory 5.41 GiB is allocated by PyTorch, and 78.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+    }
+  ]
+}
