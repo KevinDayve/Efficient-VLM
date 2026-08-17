@@ -1,0 +1,112 @@
+{
+  "experiment": "two_stage_accuracy",
+  "method": "stage1 maxmin+merge (input-side) -> stage2 single-row attention prune",
+  "backbone": "llava_ov",
+  "model_name": "llava-hf/llava-onevision-qwen2-7b-ov-hf",
+  "data_root": "../datasets/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 16,
+  "max_pixels": null,
+  "min_pixels": null,
+  "n_layers": 28,
+  "prune_layer": 14,
+  "query_row": -1,
+  "score_norm": "all",
+  "window": 2,
+  "group_by": "window",
+  "center": true,
+  "maxmin_seed": "centroid",
+  "seed": 0,
+  "configs": [
+    "maxmin+none",
+    "random+none",
+    "maxmin_nomerge+none",
+    "random_nomerge+none"
+  ],
+  "budgets": [
+    [
+      0.5,
+      1.0
+    ]
+  ],
+  "variants": [
+    "maxmin+none@0.5/1",
+    "random+none@0.5/1",
+    "maxmin_nomerge+none@0.5/1",
+    "random_nomerge+none@0.5/1"
+  ],
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 500,
+  "full_accuracy": 0.596,
+  "text_only": true,
+  "text_only_accuracy": 0.314,
+  "chance_accuracy": 0.2,
+  "self_test": {
+    "identity": {
+      "pruned_pred": 3,
+      "dense_pred": 3,
+      "ok": true
+    },
+    "scorer": {
+      "max_abs_diff": 3.7709251046180725e-05,
+      "top10pct_overlap": 0.9968051118210862,
+      "n_visual": 3137,
+      "ok": true
+    },
+    "visual_norm_shortcut": {
+      "top10pct_overlap": 0.8338658146964856
+    }
+  },
+  "accuracy_by_config": {
+    "full": 0.596,
+    "text_only": 0.314,
+    "maxmin+none@0.5/1": 0.636,
+    "random+none@0.5/1": 0.64,
+    "maxmin_nomerge+none@0.5/1": 0.636,
+    "random_nomerge+none@0.5/1": 0.63
+  },
+  "retention_vs_dense": {
+    "maxmin+none@0.5/1": 1.0671140939597317,
+    "random+none@0.5/1": 1.0738255033557047,
+    "maxmin_nomerge+none@0.5/1": 1.0671140939597317,
+    "random_nomerge+none@0.5/1": 1.0570469798657718
+  },
+  "realised_visual_keep_rate": {
+    "maxmin+none@0.5/1": 0.5001593879502709,
+    "random+none@0.5/1": 0.5001593879502709,
+    "maxmin_nomerge+none@0.5/1": 0.5001593879502709,
+    "random_nomerge+none@0.5/1": 0.5001593879502709
+  },
+  "average_retention_accounting": {
+    "0.5/1": {
+      "stage1": 0.5,
+      "stage2": 1.0,
+      "decoder_layer_fraction": 1.0,
+      "average_visual_retention": 0.5
+    }
+  },
+  "above_floor": {
+    "maxmin+none@0.5/1": 1.1418439716312059,
+    "random+none@0.5/1": 1.1560283687943265,
+    "maxmin_nomerge+none@0.5/1": 1.1418439716312059,
+    "random_nomerge+none@0.5/1": 1.1205673758865249
+  },
+  "mcnemar_ablations": [],
+  "per_task_seen": {
+    "EgoSchema": 500
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.596,
+      "text_only": 0.314,
+      "maxmin+none@0.5/1": 0.636,
+      "random+none@0.5/1": 0.64,
+      "maxmin_nomerge+none@0.5/1": 0.636,
+      "random_nomerge+none@0.5/1": 0.63
+    }
+  },
+  "skipped": []
+}

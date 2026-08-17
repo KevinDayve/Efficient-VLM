@@ -549,15 +549,25 @@ def main(args):
                                 **mcnemar(hits[a], hits[b])))
         return out
 
+    def tests_vs_ref(ref: str, note: str):
+        """Every arm against a budget-free reference (dense, or the blind floor)."""
+        return [dict(rho1=r1, rho2=r2, selector=spec, baseline=ref, note=note,
+                     delta_pts=100 * (acc[f"{spec}@{r1:g}/{r2:g}"] - acc[ref]),
+                     **mcnemar(hits[f"{spec}@{r1:g}/{r2:g}"], hits[ref]))
+                for r1, r2 in budgets for spec in args.configs]
+
+    # The method is the baseline the controls are meant to answer to, but a run need not
+    # include it -- a stage-one sweep does not -- and hardcoding it there leaves the whole
+    # table silently empty. Fall back to the first config so a run always tests something.
+    base_spec = "maxmin+attn" if "maxmin+attn" in args.configs else args.configs[0]
+
     # Each control answers one question, so each gets its own paired test against the
-    # method rather than one omnibus comparison.
-    ablations = (tests_against("maxmin+attn", "vs the method")
-                 + [dict(rho1=r1, rho2=r2, selector="maxmin+attn",
-                         baseline="text_only", note="vs the blind floor",
-                         delta_pts=100 * (acc[f"maxmin+attn@{r1:g}/{r2:g}"] - acc["text_only"]),
-                         **mcnemar(hits[f"maxmin+attn@{r1:g}/{r2:g}"], hits["text_only"]))
-                    for r1, r2 in budgets
-                    if args.text_only and f"maxmin+attn@{r1:g}/{r2:g}" in acc])
+    # baseline rather than one omnibus comparison. Dense is tested separately: at low
+    # retention the interesting question stops being "which control wins" and becomes
+    # "is this distinguishable from not pruning at all".
+    ablations = (tests_against(base_spec, f"vs {base_spec}")
+                 + tests_vs_ref("full", "vs dense")
+                 + (tests_vs_ref("text_only", "vs the blind floor") if args.text_only else []))
 
     out = {"experiment": "two_stage_accuracy",
            "method": "stage1 maxmin+merge (input-side) -> stage2 single-row attention prune",

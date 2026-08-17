@@ -48,4 +48,4 @@ runs/
 Thumbs.db
 
 # Local clone of huggingface/transformers (changes tracked via patches/, not vendored)
-transformers/final_expt_results/frame_level_accuracy/examples.zip
+final_expt_results/frame_level_accuracy/examples.zip
