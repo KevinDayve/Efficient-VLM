@@ -291,7 +291,7 @@ def self_test(model, text_model, ctx, embeds, pos, visual_idx, S, letter_ids,
     # ---- gate 1: the whole path at rho = 1 must be the dense forward ----
     pred, _ = run_config(model, text_model, "maxmin", "attn", embeds, pos, visual_idx,
                          S, letter_ids, args, 1.0, 1.0, np.random.default_rng(0), n_frames)
-    dense_pred = int(torch.argmax(dense_logits[letter_ids]).item())
+    dense_pred = int(torch.argmax(dense_logits[letter_ids.to(dense_logits.device)]).item())
     report["identity"] = {"pruned_pred": pred, "dense_pred": dense_pred,
                           "ok": pred == dense_pred}
 
@@ -433,7 +433,8 @@ def main(args):
                 with torch.no_grad():
                     dense = model(**inputs, use_cache=False)
                 dense_logits = dense.logits[0, -1].detach()
-                full_pred = int(torch.argmax(dense_logits[letter_ids]).item())
+                full_pred = int(torch.argmax(
+                    dense_logits[letter_ids.to(dense_logits.device)]).item())
                 ctx["capture"] = False
                 del dense
 
@@ -442,10 +443,19 @@ def main(args):
                     raise RuntimeError("did not capture the merged input embeddings")
                 pos = ctx["position_ids"]
                 if pos is None:
-                    pos = torch.arange(S, device=device)[None]
+                    pos = torch.arange(S, device=embeds.device)[None]
                 if pos.shape[-1] != S:
                     raise RuntimeError(f"captured position ids are {tuple(pos.shape)}, "
                                        f"expected last dim {S}")
+
+                # Under device_map="auto" the decoder stack need not sit on the GPU the
+                # inputs were built on -- with a 7B LM and a vision tower to place, the
+                # whole stack can land on cuda:1 while input_ids stay on cuda:0. Every
+                # selector below slices `embeds` with indices derived from `visual_idx`,
+                # so the indices and the position ids follow the embeddings here, once,
+                # rather than at each of the dozen sites that consume them.
+                visual_idx = visual_idx.to(embeds.device)
+                pos = pos.to(embeds.device)
 
                 if args.self_test and self_test_report is None:
                     try:

@@ -572,7 +572,11 @@ def predict_midforward(model, embeds, position_ids, keep_abs, letter_ids,
                     use_cache=False)
     finally:
         uninstall()
-    return int(torch.argmax(out.logits[0, -1][letter_ids]).item())
+    # accelerate returns the output to whichever device the INPUT was on, so under
+    # device_map="auto" these logits follow `embeds` rather than the input_ids the
+    # letter ids were built alongside.
+    logits = out.logits[0, -1]
+    return int(torch.argmax(logits[letter_ids.to(logits.device)]).item())
 
 
 @torch.no_grad()
@@ -594,7 +598,8 @@ def predict_pruned(model, embeds, position_ids, keep_abs, letter_ids) -> int:
                 attention_mask=torch.ones(1, keep_abs.numel(), dtype=torch.long,
                                           device=embeds.device),
                 use_cache=False)
-    return int(torch.argmax(out.logits[0, -1][letter_ids]).item())
+    logits = out.logits[0, -1]                        # see predict_midforward on devices
+    return int(torch.argmax(logits[letter_ids.to(logits.device)]).item())
 
 
 # --------------------------------------------------------------------------- #
