@@ -191,13 +191,19 @@ def score_from_row(layer, hidden_states: torch.Tensor,
             f"query row {qrow} sits before visual token {int(visual_idx.max())}; under a "
             "causal mask that token is invisible to this row and scoring it is meaningless")
 
-    dev = hidden_states.device
-    visual_idx = visual_idx.to(dev)
     head_dim = attn.head_dim
     scaling = getattr(attn, "scaling", head_dim ** -0.5)
-    cos, sin = position_embeddings
 
     h = layer.input_layernorm(hidden_states)          # the layer's own norm, not a copy
+    # Take the device from h, not from what we were handed. Under device_map="auto" the
+    # caller's hidden_states come from a forward PRE-hook on this layer, and accelerate
+    # aligns devices inside the patched forward -- which runs after pre-hooks -- so the
+    # captured tensor is still on the previous layer's GPU. The norm above is the first
+    # hooked submodule to touch it, so h is the tensor already on this layer's execution
+    # device, and every index and rotary tensor below has to follow h rather than it.
+    dev = h.device
+    visual_idx = visual_idx.to(dev)
+    cos, sin = (t.to(dev) for t in position_embeddings)
     key_idx = (torch.arange(S, device=dev) if norm == "all" else visual_idx)
 
     q = attn.q_proj(h[:, qrow:qrow + 1, :]).view(1, 1, -1, head_dim).transpose(1, 2)

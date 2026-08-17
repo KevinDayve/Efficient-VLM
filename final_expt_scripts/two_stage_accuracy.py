@@ -121,6 +121,17 @@ DEFAULT_CONFIGS = ["maxmin+attn", "maxmin_nomerge+attn", "random+attn",
                    "maxmin+random", "random+random", "maxmin+none", "none+attn"]
 
 
+class SelfTestFailed(RuntimeError):
+    """A self-test that did not merely fail its gate but could not be run at all.
+
+    Carried as its own type so the per-clip handler lets it through: the gates run once,
+    on the first usable clip, and a swallowed failure there leaves self_test_report None,
+    so every remaining clip re-runs the same broken gate and is skipped for the same
+    reason. That turns one fatal fault into a whole dataset of identical skip lines and a
+    run that ends with no numbers and no summary of why.
+    """
+
+
 def parse_config(spec: str) -> tuple[str, str]:
     if spec.count("+") != 1:
         raise ValueError(f"config {spec!r} must be '<stage1>+<stage2>'")
@@ -437,9 +448,14 @@ def main(args):
                                        f"expected last dim {S}")
 
                 if args.self_test and self_test_report is None:
-                    self_test_report = self_test(model, text_model, ctx, embeds, pos,
-                                                 visual_idx, S, letter_ids, dense_logits,
-                                                 args, args.num_segments)
+                    try:
+                        self_test_report = self_test(model, text_model, ctx, embeds, pos,
+                                                     visual_idx, S, letter_ids,
+                                                     dense_logits, args, args.num_segments)
+                    except Exception as e:
+                        raise SelfTestFailed(
+                            f"the self-test could not be run on the first usable clip -- "
+                            f"{type(e).__name__}: {e}") from e
                     ctx["want_eager"] = False       # the gate is done; stop paying for it
 
                 preds, info = {}, {}
@@ -463,6 +479,8 @@ def main(args):
                         preds[lab], info[lab] = run_config(
                             model, text_model, s1, s2, embeds, pos, visual_idx, S,
                             letter_ids, args, r1, r2, rng, args.num_segments)
+            except SelfTestFailed:
+                raise
             except Exception as e:
                 ctx.update({"capture": False, "embeds": None, "position_ids": None,
                             "h_k": None, "pe_k": None, "attn_k": None})
