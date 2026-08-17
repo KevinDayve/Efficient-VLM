@@ -593,8 +593,11 @@ def predict_pruned(model, embeds, position_ids, keep_abs, letter_ids) -> int:
     Returns:
         int: The predicted option index (0-based) corresponding to the argmax over the option-letter token ids at the last position of the sequence.
     """
-    out = model(inputs_embeds=embeds[:, keep_abs],
-                position_ids=position_ids[..., keep_abs],
+    # keep_abs is built from the input_ids' device, but under device_map="auto" the captured
+    # embeddings and position ids sit on whichever GPU holds layer 0 / the decoder stack, so
+    # the index tensor follows each tensor it indexes (see attach_capture on devices).
+    out = model(inputs_embeds=embeds[:, keep_abs.to(embeds.device)],
+                position_ids=position_ids[..., keep_abs.to(position_ids.device)],
                 attention_mask=torch.ones(1, keep_abs.numel(), dtype=torch.long,
                                           device=embeds.device),
                 use_cache=False)
