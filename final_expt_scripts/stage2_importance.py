@@ -138,14 +138,38 @@ def _apply_rope(attn, q, k, cos_q, sin_q, cos_k, sin_k):
     the library's own code rather than a reimplementation of it that could drift from
     the forward the model actually runs.
     """
-    section = getattr(attn, "rope_scaling", None)
-    if isinstance(section, dict) and "mrope_section" in section:
+    ms = _mrope_section(attn)
+    if ms is not None:
         from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
             apply_multimodal_rotary_pos_emb as rope)
-        ms = section["mrope_section"]
         return rope(q, q, cos_q, sin_q, ms)[0], rope(k, k, cos_k, sin_k, ms)[0]
+    # A 3D mRoPE cos is (3, B, S, d) against the 1D form's (B, S, d). Handing the former
+    # to the 1D rotation does not fail -- it broadcasts, and the caller only notices three
+    # frames later when an unpack sees five axes. Refuse it here, where the cause is legible.
+    if cos_k.dim() == 4:
+        raise RuntimeError(
+            f"position_embeddings are 3D mRoPE {tuple(cos_k.shape)} but no mrope_section "
+            f"was found on {type(attn).__name__} or its config; the rebuilt row would be "
+            "rotated as plain 1D RoPE and would not be the quantity the model computes")
     from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb as rope
     return rope(q, q, cos_q, sin_q)[0], rope(k, k, cos_k, sin_k)[0]
+
+
+def _mrope_section(attn):
+    """The mrope_section for this attention module, or None if its RoPE is plain 1D.
+
+    Qwen2.5-VL splits the channel dimension into temporal / height / width sections; the
+    Qwen2 text model behind LLaVA-OneVision does not. Where that split is recorded has
+    moved across transformers versions -- `config.rope_scaling` became
+    `config.rope_parameters` -- and it lives on the CONFIG, not on the attention module,
+    so a single getattr on `attn` silently reports "no mrope" for every Qwen build.
+    """
+    for holder in (attn, getattr(attn, "config", None)):
+        for name in ("rope_parameters", "rope_scaling"):
+            cfg = getattr(holder, name, None)
+            if isinstance(cfg, dict) and "mrope_section" in cfg:
+                return cfg["mrope_section"]
+    return None
 
 
 def _repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
