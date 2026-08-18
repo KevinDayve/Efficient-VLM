@@ -57,18 +57,28 @@ Run
         --extra_llava_ego final_expt_results/topk_accuracy/div_ego_llavaov.json \
         --out final_expt_results/topk_accuracy/topk_panels.png final_expt_results/topk_accuracy/topk_panels.pdf
 
-The four sweeps, four floors and two div overlays are the defaults, so the figure as
-committed is just
+The four sweeps, four floors and all four div overlays are the defaults, so the figure
+as committed is just
 
-    python final_expt_scripts/plot_scripts/plot_topk_panels.py --allow_drift \
+    python final_expt_scripts/plot_scripts/plot_topk_panels.py --allow_drift --no_drift_note \
         --out final_expt_results/topk_accuracy/topk_panels.png final_expt_results/topk_accuracy/topk_panels.pdf
 
-where --allow_drift is currently carrying exactly one known mismatch: div_ego_qwen.json
-was swept at native per-frame resolution while topk_ego_qwen.json used
---max_pixels/--min_pixels 200704, so its div_mid curve sits on a different unpruned
-model (62.9% vs the panel's 61.0%) and can cross the panel's ceiling without that
-meaning anything. Re-running that sweep with the clamp removes both the flag and the
-stamp.
+--no_drift_note keeps the two Qwen panels clean, so the caveats below are NOT on the
+figure and have to be carried by the caption instead; drop the flag to have each panel
+stamp its own. --allow_drift is currently carrying two known mismatches:
+
+    div_ego_qwen.json was swept at native per-frame resolution while topk_ego_qwen.json
+    used --max_pixels/--min_pixels 200704, so its div_mid curve sits on a different
+    unpruned model (62.9% vs the panel's 61.0%) and can cross the panel's ceiling
+    without that meaning anything.
+
+    div_mvb_qwen.json saw all 3800 MVBench clips of the 19 tasks it ran, while
+    topk_mvb_qwen.json was missing 14 of them (12 Action Sequence, 2 Object Existence)
+    at the time it was swept. Same model, resolution and frame count, so the curves are
+    comparable in a way the EgoSchema pair is not, but the clip sets are not identical
+    and the div run's own no-pruning accuracy is 61.2% against the panel's 60.9%.
+
+Re-running the drifted sweep on the panel's setting removes both the flag and the stamp.
 """
 from __future__ import annotations
 
@@ -238,8 +248,12 @@ def attach_floor(run, path: str):
     meta["text_only_accuracy"] = floor["text_only_accuracy"]
 
 
-def draw_panel(ax, run, args):
-    """One model x benchmark panel: every selector, plus its own ceiling and floor."""
+def draw_panel(ax, run, args, stamped: bool = False):
+    """One model x benchmark panel: every selector, plus its own ceiling and floor.
+
+    `stamped` says a drift note is about to be boxed into the top-left corner, which
+    is where the ceiling label would otherwise sit on a panel whose ceiling is high:
+    the label moves right of the box rather than under it."""
     xs, curves, meta = run
     full = 100 * meta["full_accuracy"]
     scale = (100 / full) if args.y == "retention" else 1.0
@@ -250,9 +264,11 @@ def draw_panel(ax, run, args):
 
     ceiling = 100.0 if args.y == "retention" else full
     ax.axhline(ceiling, **CEILING)
-    ax.annotate(f"no pruning ({full:.1f}%)", xy=(xs[0], ceiling), xytext=(0, 3),
-                textcoords="offset points", fontsize=8, color=CEILING["color"],
-                va="bottom")
+    ax.annotate(f"no pruning ({full:.1f}%)",
+                xy=(0.36 if stamped else xs[0], ceiling),
+                xycoords=("axes fraction", "data") if stamped else "data",
+                xytext=(0, 3), textcoords="offset points", fontsize=8,
+                color=CEILING["color"], va="bottom")
 
     # The floor, when the run measured one. Annotated BELOW its line so it cannot
     # collide with the ceiling label on a panel where the two sit close together --
@@ -336,8 +352,9 @@ def main(args):
             if run is None:
                 ax.set_visible(False)
                 continue
-            draw_panel(ax, run, args)
             meta = run[2]
+            note = None if args.no_drift_note else drift_note(meta)
+            draw_panel(ax, run, args, stamped=bool(note))
             if r == 0:
                 ax.set_title(PRETTY_MODEL.get(meta["model_name"],
                                               os.path.basename(meta["model_name"])))
@@ -348,10 +365,9 @@ def main(args):
                               else "accuracy (%)")
             ax.annotate(panel_note(meta), xy=(0.98, 0.03), xycoords="axes fraction",
                         ha="right", va="bottom", fontsize=8, color="0.35")
-            # Top-left: the one corner no curve, ceiling label or floor label uses
-            # on these panels, and boxed so it stays readable if a future run puts
-            # one there anyway.
-            note = None if args.no_drift_note else drift_note(meta)
+            # Top-left: the one corner no curve uses on these panels, and boxed so it
+            # stays readable if a future run puts one there anyway. The ceiling label
+            # does live there, which is why draw_panel was told about the stamp.
             if note:
                 ax.annotate(note, xy=(0.02, 0.97), xycoords="axes fraction",
                             ha="left", va="top", fontsize=6.5, color="0.15",
@@ -417,10 +433,12 @@ def parse_args():
     # overlaid on their panel from their own JSON; repeat the flag for more than one.
     p.add_argument("--extra_llava_ego", nargs="+", default=[f"{RESULTS}/div_ego_llavaov.json"],
                    help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
-    p.add_argument("--extra_llava_mvb", nargs="+", default=["none"])
+    p.add_argument("--extra_llava_mvb", nargs="+", default=[f"{RESULTS}/div_mvb_llavaov.json"],
+                   help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
     p.add_argument("--extra_qwen_ego", nargs="+", default=[f"{RESULTS}/div_ego_qwen.json"],
                    help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
-    p.add_argument("--extra_qwen_mvb", nargs="+", default=["none"])
+    p.add_argument("--extra_qwen_mvb", nargs="+", default=[f"{RESULTS}/div_mvb_qwen.json"],
+                   help="extra sweep JSONs whose selectors join this panel; 'none' for none.")
     p.add_argument("--y", choices=["accuracy", "retention"], default="accuracy",
                    help="retention = accuracy / that panel's no-pruning accuracy.")
     p.add_argument("--share_y", choices=["row", "all", "none"], default="row",

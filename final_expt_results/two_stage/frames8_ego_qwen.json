@@ -1,0 +1,116 @@
+{
+  "experiment": "two_stage_accuracy",
+  "method": "stage1 maxmin+merge (input-side) -> stage2 single-row attention prune",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "data_root": "../datasets/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 8,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "n_layers": 28,
+  "prune_layer": 14,
+  "query_row": -1,
+  "score_norm": "all",
+  "window": 2,
+  "group_by": "window",
+  "center": true,
+  "maxmin_seed": "centroid",
+  "seed": 0,
+  "configs": [
+    "maxmin+none"
+  ],
+  "budgets": [
+    [
+      1.0,
+      1.0
+    ]
+  ],
+  "variants": [
+    "maxmin+none@1/1"
+  ],
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 500,
+  "full_accuracy": 0.568,
+  "text_only": true,
+  "text_only_accuracy": 0.314,
+  "chance_accuracy": 0.2,
+  "self_test": {
+    "identity": {
+      "pruned_pred": 3,
+      "dense_pred": 3,
+      "ok": true
+    },
+    "scorer": {
+      "max_abs_diff": 7.871567504480481e-06,
+      "top10pct_overlap": 0.9897959183673469,
+      "n_visual": 988,
+      "ok": true
+    },
+    "visual_norm_shortcut": {
+      "top10pct_overlap": 0.8877551020408163
+    }
+  },
+  "accuracy_by_config": {
+    "full": 0.568,
+    "text_only": 0.314,
+    "maxmin+none@1/1": 0.568
+  },
+  "retention_vs_dense": {
+    "maxmin+none@1/1": 1.0
+  },
+  "realised_visual_keep_rate": {
+    "maxmin+none@1/1": 1.0
+  },
+  "average_retention_accounting": {
+    "1/1": {
+      "stage1": 1.0,
+      "stage2": 1.0,
+      "decoder_layer_fraction": 1.0,
+      "average_visual_retention": 1.0
+    }
+  },
+  "above_floor": {
+    "maxmin+none@1/1": 1.0
+  },
+  "mcnemar_ablations": [
+    {
+      "rho1": 1.0,
+      "rho2": 1.0,
+      "selector": "maxmin+none",
+      "baseline": "full",
+      "note": "vs dense",
+      "delta_pts": 0.0,
+      "b": 0,
+      "c": 0,
+      "n_discordant": 0,
+      "p_value": 1.0
+    },
+    {
+      "rho1": 1.0,
+      "rho2": 1.0,
+      "selector": "maxmin+none",
+      "baseline": "text_only",
+      "note": "vs the blind floor",
+      "delta_pts": 25.399999999999995,
+      "b": 154,
+      "c": 27,
+      "n_discordant": 181,
+      "p_value": 8.52411184793958e-23
+    }
+  ],
+  "per_task_seen": {
+    "EgoSchema": 500
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.568,
+      "text_only": 0.314,
+      "maxmin+none@1/1": 0.568
+    }
+  },
+  "skipped": []
+}
