@@ -96,6 +96,26 @@ def load(path: str) -> dict:
         return json.load(fh)
 
 
+def bench_key(meta: dict) -> tuple:
+    """The benchmark a JSON was measured on, as a hashable key.
+
+    Taken from `tasks` rather than from the filename: `tasks` is already one of the
+    fields check_same_setting refuses to mix, so grouping on it means a run can never
+    land in a row it does not belong to however the file was named."""
+    return tuple(meta["tasks"])
+
+
+def bench_label(key: tuple, n_tasks: int | None = None) -> str:
+    """Row label. The task count comes from what was SEEN, never from `tasks`.
+
+    `tasks` records what was asked for; a task whose videos are missing is skipped
+    wholesale and never appears in per_task_seen. MVBench here is 19 of the 20, and a
+    caption claiming 20 would be the figure asserting something the run did not measure."""
+    if len(key) == 1:
+        return key[0]
+    return f"MVBench ({n_tasks or len(key)} tasks)"
+
+
 def n_visual_tokens(summary_path: str) -> int:
     """Median visual-token count from the run's per-sample sidecar.
 
@@ -211,6 +231,7 @@ def build_column(curve_paths, two_stage_path, frames8_path, dense_ref_path,
     return {"metas": metas, "two_stage": two_stage, "frames8": frames8,
             "model": anchor["model_name"], "tasks": anchor["tasks"],
             "n_clips": anchor["n_clips"], "frames": anchor["num_segments"],
+            "n_tasks": len(anchor.get("per_task_seen") or anchor["tasks"]),
             "dense": 100 * anchor["full_accuracy"],
             "dense_tokens": anchor["_tokens"],
             "floor": (None if anchor.get("text_only_accuracy") is None
@@ -324,47 +345,102 @@ def panel_frames(ax, col: dict, title: str, iso_arm: str, iso_retention: float):
 
 
 def main(args):
-    cols = []
+    exists = lambda ps: [p for p in (ps or []) if p and os.path.exists(p)]
+
+    # models x benchmarks. Each model supplies flat lists of JSONs; which benchmark row
+    # a file belongs to is read off the file, so adding MVBench is adding paths.
+    models, benches = [], []
     for curve, two_stage, frames8, dense_ref in (
             (args.llava_curve, args.llava_two_stage, args.llava_frames8, args.llava_dense_ref),
             (args.qwen_curve, args.qwen_two_stage, args.qwen_frames8, args.qwen_dense_ref)):
-        curve = [p for p in (curve or []) if p and os.path.exists(p)]
-        pick = lambda p: p if p and os.path.exists(p) else None
-        if not curve and not pick(dense_ref):
-            continue
-        cols.append(build_column(curve, pick(two_stage), pick(frames8),
-                                 pick(dense_ref), not args.allow_drift))
-    if not cols:
+        by_bench = {}
+        groups = {"curve": exists(curve), "two_stage": exists(two_stage),
+                  "frames8": exists(frames8), "dense_ref": exists(dense_ref)}
+        for kind, paths in groups.items():
+            for p in paths:
+                by_bench.setdefault(bench_key(load(p)), {}).setdefault(kind, []).append(p)
+        if by_bench:
+            models.append(by_bench)
+            for k in by_bench:
+                if k not in benches:
+                    benches.append(k)
+    if not models:
         raise SystemExit("nothing to plot -- no sweep or dense reference found")
+    # EgoSchema (a single task) before MVBench (twenty), then by label.
+    benches.sort(key=lambda k: (len(k) > 1, bench_label(k)))
 
-    fig, axes = plt.subplots(2, len(cols), figsize=tuple(args.figsize),
-                             squeeze=False, gridspec_kw={"height_ratios": [1.5, 1]})
-    tags = "abcdefgh"
-    for j, col in enumerate(cols):
-        name = PRETTY_MODEL.get(col["model"], col["model"])
-        panel_curve(axes[0][j], col, f"({tags[j]})  {name}", not args.no_dense_point)
-        panel_frames(axes[1][j], col, f"({tags[len(cols) + j]})  {name}",
-                     args.iso_arm, args.iso_retention)
-    axes[0][0].set_ylabel("accuracy (%)")
+    cells = {}                      # (bench, model index) -> column, or None
+    for j, by_bench in enumerate(models):
+        for b in benches:
+            g = by_bench.get(b, {})
+            if not g.get("curve") and not g.get("dense_ref"):
+                continue
+            cells[(b, j)] = build_column(
+                g.get("curve", []), (g.get("two_stage") or [None])[0],
+                (g.get("frames8") or [None])[0], (g.get("dense_ref") or [None])[0],
+                not args.allow_drift)
 
-    # y shared across row (a) and x across row (b): the comparison worth making
-    # pixel-for-pixel is the same quantity on two backbones.
-    if len(cols) > 1:
-        lo = min(ax.get_ylim()[0] for ax in axes[0])
-        hi = max(ax.get_ylim()[1] for ax in axes[0])
-        for ax in axes[0]:
-            ax.set_ylim(lo, hi)
-        for ax in axes[0][1:]:
-            ax.tick_params(labelleft=False)
-        lo = min(ax.get_xlim()[0] for ax in axes[1])
-        hi = max(ax.get_xlim()[1] for ax in axes[1])
-        for ax in axes[1]:
-            ax.set_xlim(lo, hi)
+    # One curve row per benchmark, then one iso-token row per benchmark that has a frame
+    # control. A benchmark with no frame control simply contributes no second row.
+    rows = [("curve", b) for b in benches]
+    rows += [("frames", b) for b in benches
+             if any(cells.get((b, j), {}) and cells[(b, j)]["frames8"] is not None
+                    for j in range(len(models)))]
+
+    h = {"curve": 1.5, "frames": 1.0}
+    fig, axes = plt.subplots(len(rows), len(models),
+                             figsize=(args.figsize[0], sum(h[k] for k, _ in rows) * 2.6),
+                             squeeze=False,
+                             gridspec_kw={"height_ratios": [h[k] for k, _ in rows]})
+    tags, t = "abcdefghijkl", 0
+    for i, (kind, b) in enumerate(rows):
+        for j, by_bench in enumerate(models):
+            ax = axes[i][j]
+            col = cells.get((b, j))
+            if col is None:
+                ax.set_visible(False)
+                continue
+            name = PRETTY_MODEL.get(col["model"], col["model"])
+            title = f"({tags[t]})  {name}"
+            t += 1
+            if kind == "curve":
+                panel_curve(ax, col, title, not args.no_dense_point)
+            else:
+                panel_frames(ax, col, title, args.iso_arm, args.iso_retention)
+        first = next((axes[i][j] for j in range(len(models))
+                      if axes[i][j].get_visible()), None)
+        if first is not None:
+            row_cells = [cells[(b, j)] for j in range(len(models)) if (b, j) in cells]
+            ns = sorted({c["n_clips"] for c in row_cells})
+            # Cells in a row can rest on different clip counts while one of them is still
+            # a sidecar reference; say so rather than picking one and implying agreement.
+            clips = f"{ns[0]}" if len(ns) == 1 else f"{ns[0]}–{ns[-1]}"
+            lab = bench_label(b, max(c["n_tasks"] for c in row_cells))
+            first.set_ylabel(f"{lab}, {clips} clips\naccuracy (%)"
+                             if kind == "curve" else lab)
+
+    # Shared scales WITHIN a row only: two backbones on one benchmark is the comparison
+    # worth making pixel-for-pixel, while EgoSchema and MVBench sit at different accuracy
+    # levels and sharing across them would flatten both.
+    for i, (kind, _) in enumerate(rows):
+        vis = [ax for ax in axes[i] if ax.get_visible()]
+        if len(vis) < 2:
+            continue
+        if kind == "curve":
+            lo, hi = min(a.get_ylim()[0] for a in vis), max(a.get_ylim()[1] for a in vis)
+            for ax in vis:
+                ax.set_ylim(lo, hi)
+            for ax in vis[1:]:
+                ax.tick_params(labelleft=False)
+        else:
+            lo, hi = min(a.get_xlim()[0] for a in vis), max(a.get_xlim()[1] for a in vis)
+            for ax in vis:
+                ax.set_xlim(lo, hi)
 
     handles = [Line2D([], [], color=SELECT_COLOR[s], ls=DISPOSAL_STYLE[m],
                       marker="o", ms=4.5, lw=1.8, label=PRETTY_ARM[a])
                for a, s, m in ARMS]
-    if any(c["two_stage"] is not None for c in cols):
+    if any(c["two_stage"] is not None for c in cells.values()):
         handles.append(Line2D([], [], **TWOSTAGE, label="+ stage two at layer 14"))
     handles += [Line2D([], [], **CEILING, label="no pruning"),
                 Line2D([], [], **FLOOR, label="no visual tokens")]
@@ -373,9 +449,11 @@ def main(args):
     fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, fontsize=9,
                handlelength=3.0, columnspacing=1.6, bbox_to_anchor=(0.5, 0.0))
 
-    ref = cols[0]
-    fig.suptitle(f"{'/'.join(ref['tasks'])} · {ref['n_clips']} clips · "
-                 f"{ref['frames']} frames", fontsize=10, y=0.995)
+    # Benchmark and clip count live on each row's label, so the suptitle carries only
+    # what every panel shares.
+    frames = sorted({c["frames"] for c in cells.values()})
+    fig.suptitle(f"{'/'.join(map(str, frames))} frames per clip · "
+                 f"stage one only, no decoder-side prune", fontsize=10, y=0.995)
     fig.tight_layout(rect=(0, args.legend_space, 1, 0.975))
     for path in args.out:
         fig.savefig(path, dpi=args.dpi)
@@ -385,23 +463,33 @@ def main(args):
 def parse_args():
     p = argparse.ArgumentParser(description="Stage-one retention curve and iso-token "
                                             "frame control, one column per model.")
+    # Flat lists per model; the benchmark row each file belongs to is read off the file.
     p.add_argument("--llava_curve", nargs="+",
                    default=[f"{RESULTS}/stage1_curve_ego_llavaov.json",
-                            f"{RESULTS}/stage1_only_ego_llavaov.json"])
-    p.add_argument("--llava_two_stage", default=f"{RESULTS}/two_stage_ego_llavaov.json")
-    p.add_argument("--llava_frames8", default=f"{RESULTS}/frames8_ego_llavaov.json")
-    p.add_argument("--llava_dense_ref", default=None,
-                   help="fallback for the column's dense/floor anchors when it has no "
-                        "sweep yet; must be the same setting (see SETTING_KEYS).")
+                            f"{RESULTS}/stage1_only_ego_llavaov.json",
+                            f"{RESULTS}/stage1_curve_mvb_llavaov.json"])
+    p.add_argument("--llava_two_stage", nargs="+",
+                   default=[f"{RESULTS}/two_stage_ego_llavaov.json"])
+    p.add_argument("--llava_frames8", nargs="+",
+                   default=[f"{RESULTS}/frames8_ego_llavaov.json",
+                            f"{RESULTS}/frames8_mvb_llavaov.json"])
+    p.add_argument("--llava_dense_ref", nargs="+", default=[],
+                   help="fallback for a cell's dense/floor anchors when it has no sweep "
+                        "yet; must be the same setting (see SETTING_KEYS).")
     p.add_argument("--qwen_curve", nargs="+",
                    default=[f"{RESULTS}/stage1_curve_ego_qwen.json",
-                            f"{RESULTS}/stage1_hi_ego_qwen.json"])
-    p.add_argument("--qwen_two_stage", default=f"{RESULTS}/two_stage_ego_qwen.json")
-    p.add_argument("--qwen_frames8", default=f"{RESULTS}/frames8_ego_qwen.json")
-    # floor_ego_qwen rather than topk_ego_qwen: both report the same 61.0% dense, but
-    # only this one also carries text_only_accuracy, so the column gets both anchors.
-    p.add_argument("--qwen_dense_ref",
-                   default="final_expt_results/topk_accuracy/floor_ego_qwen.json")
+                            f"{RESULTS}/stage1_hi_ego_qwen.json",
+                            f"{RESULTS}/stage1_curve_mvb_qwen.json"])
+    p.add_argument("--qwen_two_stage", nargs="+",
+                   default=[f"{RESULTS}/two_stage_ego_qwen.json"])
+    p.add_argument("--qwen_frames8", nargs="+",
+                   default=[f"{RESULTS}/frames8_ego_qwen.json",
+                            f"{RESULTS}/frames8_mvb_qwen.json"])
+    # floor_* rather than topk_*: both report the same dense accuracy, but only these
+    # also carry text_only_accuracy, so a pending cell gets both anchors.
+    p.add_argument("--qwen_dense_ref", nargs="+",
+                   default=["final_expt_results/topk_accuracy/floor_ego_qwen.json",
+                            "final_expt_results/topk_accuracy/floor_mvb_qwen.json"])
     p.add_argument("--iso_arm", default="random+none",
                    help="which pruned arm row (b) shows against the frame control.")
     p.add_argument("--iso_retention", type=float, default=50.0,
