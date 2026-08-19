@@ -37,6 +37,11 @@ the same tokens); for the two-stage arms they do not, and plotting the final rat
 credit a layer-14 prune with a saving it does not make in layers 0..13. Retention is
 computed PER CONFIG, not per budget -- see config_retention.
 
+Stage-one arms only. The decoder-side (stage-two) arms are measured and live in
+two_stage_ego_*.json, but they are not drawn here: at 30% retention they land on a curve
+point and need their own marker vocabulary to be read at all, and the panel is worth more
+as one uncluttered claim about stage one. Plot them separately if they are wanted.
+
 A model with no sweep yet still gets its column, drawn with whatever anchors exist and
 stamped as pending, so the figure can be regenerated unchanged as runs land.
 
@@ -51,6 +56,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from math import comb
 
 import numpy as np
 import matplotlib
@@ -81,7 +87,6 @@ PRETTY_MODEL = {"llava-hf/llava-onevision-qwen2-7b-ov-hf": "LLaVA-OneVision-7B",
 # Achromatic, so a colour never means anything but the selector.
 CEILING = dict(color="0.25", lw=1.3, ls=":")
 FLOOR = dict(color="black", lw=0.9, ls="-.")
-TWOSTAGE = dict(color="0.45", marker="s", ls="none", ms=6, mfc="none", mew=1.4)
 DOT_REF = "0.62"
 DOT_INK = "0.20"
 
@@ -161,6 +166,48 @@ def config_retention(meta: dict, spec: str, r1: float, r2: float) -> float:
     return 100 * e1 * (k + (n - k) * e2) / n
 
 
+def per_sample(summary_path: str) -> dict:
+    """The run's per-clip predictions, keyed by question so two runs can be joined."""
+    side = os.path.splitext(summary_path)[0] + "_per_sample.json"
+    with open(side) as fh:
+        return {(r["task"], r["question_idx"]): r for r in json.load(fh)}
+
+
+def mcnemar_p(b: int, c: int) -> float:
+    """Exact two-sided McNemar on b/c discordant pairs."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    k = min(b, c)
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
+
+
+def paired_contrast(a_path: str, a_key: str, b_path: str, b_key: str):
+    """(delta in points, p) for arm a against arm b, paired over the clips both scored.
+
+    Cross-file on purpose: the frame control and the sweep are separate runs over the same
+    500 questions, so the only comparison the control row exists to make is available only
+    by joining their sidecars per question. Doing it unpaired would discard the pairing --
+    and the pairing is most of the power here, since the two arms agree on ~90% of clips."""
+    A, B = per_sample(a_path), per_sample(b_path)
+    keys = sorted(set(A) & set(B))
+    if not keys:
+        return None
+    for src, key, path in ((A, a_key, a_path), (B, b_key, b_path)):
+        if key not in src[keys[0]]["pred_by_config"]:
+            raise SystemExit(f"{path}: no config {key!r} in the per-sample sidecar")
+    b = c = na = nb = 0
+    for k in keys:
+        ca = A[k]["pred_by_config"][a_key] == A[k]["gold"]
+        cb = B[k]["pred_by_config"][b_key] == B[k]["gold"]
+        na, nb = na + ca, nb + cb
+        if ca and not cb:
+            b += 1
+        elif cb and not ca:
+            c += 1
+    return 100 * (na - nb) / len(keys), mcnemar_p(b, c)
+
+
 def curve_points(metas: list[dict], arm: str) -> tuple[np.ndarray, np.ndarray]:
     """(x%, y%) for one arm, pooled across however many sweeps supply its budgets."""
     pts = []
@@ -191,8 +238,7 @@ def find_arm_at(metas: list[dict], arm: str, retention: float):
 # --------------------------------------------------------------------------- #
 # A column: everything measured for one model
 # --------------------------------------------------------------------------- #
-def build_column(curve_paths, two_stage_path, frames8_path, dense_ref_path,
-                 strict: bool) -> dict:
+def build_column(curve_paths, frames8_path, dense_ref_path, strict: bool) -> dict:
     metas = [load(p) for p in curve_paths]
     for m, p in zip(metas, curve_paths):
         m["_tokens"] = n_visual_tokens(p)
@@ -204,14 +250,11 @@ def build_column(curve_paths, two_stage_path, frames8_path, dense_ref_path,
                              f"{metas[0]['num_segments']} -- budgets from different frame "
                              "counts cannot share this x axis")
 
-    frames8 = two_stage = dense_ref = None
+    frames8 = dense_ref = None
     if frames8_path:
         frames8 = load(frames8_path)
         frames8["_tokens"] = n_visual_tokens(frames8_path)
         frames8["_path"] = frames8_path
-    if two_stage_path:
-        two_stage = load(two_stage_path)
-        two_stage["_path"] = two_stage_path
     if dense_ref_path:
         dense_ref = load(dense_ref_path)
         dense_ref["_tokens"] = n_visual_tokens(dense_ref_path)
@@ -222,13 +265,12 @@ def build_column(curve_paths, two_stage_path, frames8_path, dense_ref_path,
     anchor = metas[0] if metas else dense_ref
     if anchor is None:
         raise SystemExit("a column needs at least a sweep or a dense reference")
-    for side in (two_stage, dense_ref):
-        if side is not None:
-            check_same_setting(side, anchor, side["_path"], strict)
+    if dense_ref is not None:
+        check_same_setting(dense_ref, anchor, dense_ref["_path"], strict)
     if frames8 is not None:
         check_same_setting(frames8, anchor, frames8["_path"], strict)
 
-    return {"metas": metas, "two_stage": two_stage, "frames8": frames8,
+    return {"metas": metas, "frames8": frames8,
             "model": anchor["model_name"], "tasks": anchor["tasks"],
             "n_clips": anchor["n_clips"], "frames": anchor["num_segments"],
             "n_tasks": len(anchor.get("per_task_seen") or anchor["tasks"]),
@@ -254,22 +296,8 @@ def panel_curve(ax, col: dict, title: str, dense_at_100: bool):
         ax.plot(x, y, color=SELECT_COLOR[select], ls=DISPOSAL_STYLE[merged],
                 marker="o", ms=4.5, lw=1.8, zorder=3)
 
-    if col["two_stage"] is not None:
-        ts = col["two_stage"]
-        xs, ys = [], []
-        for r1, r2 in ts["budgets"]:
-            for spec in ts["configs"]:
-                lab = f"{spec}@{r1:g}/{r2:g}"
-                # Stage-two-free arms are the same measurement as the curve and would
-                # double-plot; only arms that actually prune mid-stack belong here.
-                if lab in ts["accuracy_by_config"] and not spec.endswith("+none"):
-                    xs.append(config_retention(ts, spec, r1, r2))
-                    ys.append(100 * ts["accuracy_by_config"][lab])
-        if xs:
-            ax.plot(xs, ys, **TWOSTAGE, zorder=4)
-
     # Both reference labels sit at the LEFT edge: the curves are lowest there, and the
-    # right-hand side is where the two-stage cluster and the dense point live.
+    # right-hand side is where the dense point lives.
     ax.axhline(dense, **CEILING, zorder=1)
     ax.annotate(f"no pruning  {dense:.1f}%", xy=(0.015, dense),
                 xycoords=("axes fraction", "data"), xytext=(0, 4),
@@ -302,7 +330,12 @@ def panel_frames(ax, col: dict, title: str, iso_arm: str, iso_retention: float):
     """Ways to spend a token budget, two of them identical in tokens.
 
     The point is that the two matched rows cost the same and differ only in WHERE the
-    tokens came from -- half of every frame, or all of half the frames."""
+    tokens came from -- half of every frame, or all of half the frames.
+
+    That contrast is stated with its paired p, because the two backbones split on it: the
+    same picture is a solid effect on one and not resolvable on the other, and three dots
+    laid out identically in both panels otherwise invite reading the second as confirming
+    the first."""
     frames8 = col["frames8"]
     rows = [("%d frames, dense" % col["frames"], col["dense_tokens"], col["dense"], DOT_REF)]
     if frames8 is not None:
@@ -328,9 +361,23 @@ def panel_frames(ax, col: dict, title: str, iso_arm: str, iso_retention: float):
         ax.annotate(f"{ntok} tokens", xy=(base, y), xytext=(6, -15),
                     textcoords="offset points", ha="left", fontsize=7.5, color="0.5")
 
+    # The iso-token contrast, stated rather than left to the eye. Both rows carry the same
+    # token count, so this is the only difference in the panel that is not confounded.
+    if frames8 is not None and pruned is not None:
+        got = paired_contrast(pruned["_path"], lab, frames8["_path"], "full")
+        if got is not None:
+            delta, p = got
+            ax.annotate(f"matched budget: {delta:+.1f} pts for pruning · p = {p:.3f}"
+                        + ("" if p < 0.05 else "  (n.s.)"),
+                        xy=(0.5, 0.045), xycoords="axes fraction", ha="center",
+                        fontsize=8, color="0.15" if p < 0.05 else "0.45",
+                        bbox=dict(fc="white", ec="none", pad=1.5))
+
     ax.set_yticks(ys)
     ax.set_yticklabels([r[0] for r in rows], fontsize=9)
-    ax.set_ylim(-0.7, len(rows) - 0.3)
+    # Bottom margin leaves a clear lane for the contrast line; at -0.7 it ran through the
+    # last row's token label.
+    ax.set_ylim(-1.05, len(rows) - 0.3)
     ax.margins(x=0.18)
     ax.set_xlabel("accuracy (%)")
     ax.set_title(title, fontsize=10, loc="left")
@@ -350,12 +397,12 @@ def main(args):
     # models x benchmarks. Each model supplies flat lists of JSONs; which benchmark row
     # a file belongs to is read off the file, so adding MVBench is adding paths.
     models, benches = [], []
-    for curve, two_stage, frames8, dense_ref in (
-            (args.llava_curve, args.llava_two_stage, args.llava_frames8, args.llava_dense_ref),
-            (args.qwen_curve, args.qwen_two_stage, args.qwen_frames8, args.qwen_dense_ref)):
+    for curve, frames8, dense_ref in (
+            (args.llava_curve, args.llava_frames8, args.llava_dense_ref),
+            (args.qwen_curve, args.qwen_frames8, args.qwen_dense_ref)):
         by_bench = {}
-        groups = {"curve": exists(curve), "two_stage": exists(two_stage),
-                  "frames8": exists(frames8), "dense_ref": exists(dense_ref)}
+        groups = {"curve": exists(curve), "frames8": exists(frames8),
+                  "dense_ref": exists(dense_ref)}
         for kind, paths in groups.items():
             for p in paths:
                 by_bench.setdefault(bench_key(load(p)), {}).setdefault(kind, []).append(p)
@@ -376,9 +423,8 @@ def main(args):
             if not g.get("curve") and not g.get("dense_ref"):
                 continue
             cells[(b, j)] = build_column(
-                g.get("curve", []), (g.get("two_stage") or [None])[0],
-                (g.get("frames8") or [None])[0], (g.get("dense_ref") or [None])[0],
-                not args.allow_drift)
+                g.get("curve", []), (g.get("frames8") or [None])[0],
+                (g.get("dense_ref") or [None])[0], not args.allow_drift)
 
     # One curve row per benchmark, then one iso-token row per benchmark that has a frame
     # control. A benchmark with no frame control simply contributes no second row.
@@ -440,13 +486,11 @@ def main(args):
     handles = [Line2D([], [], color=SELECT_COLOR[s], ls=DISPOSAL_STYLE[m],
                       marker="o", ms=4.5, lw=1.8, label=PRETTY_ARM[a])
                for a, s, m in ARMS]
-    if any(c["two_stage"] is not None for c in cells.values()):
-        handles.append(Line2D([], [], **TWOSTAGE, label="+ stage two at layer 14"))
     handles += [Line2D([], [], **CEILING, label="no pruning"),
                 Line2D([], [], **FLOOR, label="no visual tokens")]
     # handlelength has to show a full dash cycle -- at the default the dropped arms
     # render as solid and the panel's second finding disappears.
-    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, fontsize=9,
+    fig.legend(handles=handles, loc="lower center", ncol=3, frameon=False, fontsize=9,
                handlelength=3.0, columnspacing=1.6, bbox_to_anchor=(0.5, 0.0))
 
     # Benchmark and clip count live on each row's label, so the suptitle carries only
@@ -467,9 +511,8 @@ def parse_args():
     p.add_argument("--llava_curve", nargs="+",
                    default=[f"{RESULTS}/stage1_curve_ego_llavaov.json",
                             f"{RESULTS}/stage1_only_ego_llavaov.json",
+                            f"{RESULTS}/stage1_mid_ego_llavaov.json",
                             f"{RESULTS}/stage1_curve_mvb_llavaov.json"])
-    p.add_argument("--llava_two_stage", nargs="+",
-                   default=[f"{RESULTS}/two_stage_ego_llavaov.json"])
     p.add_argument("--llava_frames8", nargs="+",
                    default=[f"{RESULTS}/frames8_ego_llavaov.json",
                             f"{RESULTS}/frames8_mvb_llavaov.json"])
@@ -479,9 +522,8 @@ def parse_args():
     p.add_argument("--qwen_curve", nargs="+",
                    default=[f"{RESULTS}/stage1_curve_ego_qwen.json",
                             f"{RESULTS}/stage1_hi_ego_qwen.json",
+                            f"{RESULTS}/stage1_hi2_ego_qwen.json",
                             f"{RESULTS}/stage1_curve_mvb_qwen.json"])
-    p.add_argument("--qwen_two_stage", nargs="+",
-                   default=[f"{RESULTS}/two_stage_ego_qwen.json"])
     p.add_argument("--qwen_frames8", nargs="+",
                    default=[f"{RESULTS}/frames8_ego_qwen.json",
                             f"{RESULTS}/frames8_mvb_qwen.json"])

@@ -1,0 +1,245 @@
+{
+  "experiment": "two_stage_accuracy",
+  "method": "stage1 maxmin+merge (input-side) -> stage2 single-row attention prune",
+  "backbone": "qwen",
+  "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "data_root": "../datasets/EgoSchema/",
+  "tasks": [
+    "EgoSchema"
+  ],
+  "num_segments": 16,
+  "max_pixels": 200704,
+  "min_pixels": 200704,
+  "n_layers": 28,
+  "prune_layer": 14,
+  "query_row": -1,
+  "score_norm": "all",
+  "window": 2,
+  "group_by": "window",
+  "center": true,
+  "maxmin_seed": "centroid",
+  "seed": 0,
+  "configs": [
+    "maxmin+none",
+    "random+none",
+    "maxmin_nomerge+none",
+    "random_nomerge+none"
+  ],
+  "budgets": [
+    [
+      0.75,
+      1.0
+    ]
+  ],
+  "variants": [
+    "maxmin+none@0.75/1",
+    "random+none@0.75/1",
+    "maxmin_nomerge+none@0.75/1",
+    "random_nomerge+none@0.75/1"
+  ],
+  "scoring": "argmax over option-letter tokens",
+  "answer_prefix": "Best option:(",
+  "n_clips": 500,
+  "full_accuracy": 0.608,
+  "text_only": true,
+  "text_only_accuracy": 0.314,
+  "chance_accuracy": 0.2,
+  "self_test": {
+    "identity": {
+      "pruned_pred": 3,
+      "dense_pred": 3,
+      "ok": true
+    },
+    "scorer": {
+      "max_abs_diff": 7.696333341300488e-06,
+      "top10pct_overlap": 0.9949238578680203,
+      "n_visual": 1976,
+      "ok": true
+    },
+    "visual_norm_shortcut": {
+      "top10pct_overlap": 0.9086294416243654
+    }
+  },
+  "accuracy_by_config": {
+    "full": 0.608,
+    "text_only": 0.314,
+    "maxmin+none@0.75/1": 0.598,
+    "random+none@0.75/1": 0.596,
+    "maxmin_nomerge+none@0.75/1": 0.6,
+    "random_nomerge+none@0.75/1": 0.594
+  },
+  "retention_vs_dense": {
+    "maxmin+none@0.75/1": 0.9835526315789473,
+    "random+none@0.75/1": 0.9802631578947368,
+    "maxmin_nomerge+none@0.75/1": 0.9868421052631579,
+    "random_nomerge+none@0.75/1": 0.9769736842105263
+  },
+  "realised_visual_keep_rate": {
+    "maxmin+none@0.75/1": 0.7493275008919292,
+    "random+none@0.75/1": 0.7493275008919292,
+    "maxmin_nomerge+none@0.75/1": 0.7493275008919292,
+    "random_nomerge+none@0.75/1": 0.7493275008919292
+  },
+  "average_retention_accounting": {
+    "0.75/1": {
+      "stage1": 0.75,
+      "stage2": 1.0,
+      "decoder_layer_fraction": 1.0,
+      "average_visual_retention": 0.75
+    }
+  },
+  "above_floor": {
+    "maxmin+none@0.75/1": 0.9659863945578231,
+    "random+none@0.75/1": 0.9591836734693877,
+    "maxmin_nomerge+none@0.75/1": 0.9727891156462585,
+    "random_nomerge+none@0.75/1": 0.9523809523809523
+  },
+  "mcnemar_ablations": [
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random+none",
+      "baseline": "maxmin+none",
+      "note": "vs maxmin+none",
+      "delta_pts": -0.20000000000000018,
+      "b": 4,
+      "c": 5,
+      "n_discordant": 9,
+      "p_value": 0.9999999999999973
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "maxmin_nomerge+none",
+      "baseline": "maxmin+none",
+      "note": "vs maxmin+none",
+      "delta_pts": 0.20000000000000018,
+      "b": 2,
+      "c": 1,
+      "n_discordant": 3,
+      "p_value": 1.0
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random_nomerge+none",
+      "baseline": "maxmin+none",
+      "note": "vs maxmin+none",
+      "delta_pts": -0.40000000000000036,
+      "b": 2,
+      "c": 4,
+      "n_discordant": 6,
+      "p_value": 0.6875000000000016
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "maxmin+none",
+      "baseline": "full",
+      "note": "vs dense",
+      "delta_pts": -1.0000000000000009,
+      "b": 13,
+      "c": 18,
+      "n_discordant": 31,
+      "p_value": 0.47312965989112726
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random+none",
+      "baseline": "full",
+      "note": "vs dense",
+      "delta_pts": -1.200000000000001,
+      "b": 11,
+      "c": 17,
+      "n_discordant": 28,
+      "p_value": 0.34492845088243185
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "maxmin_nomerge+none",
+      "baseline": "full",
+      "note": "vs dense",
+      "delta_pts": -0.8000000000000007,
+      "b": 15,
+      "c": 19,
+      "n_discordant": 34,
+      "p_value": 0.6075913612730821
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random_nomerge+none",
+      "baseline": "full",
+      "note": "vs dense",
+      "delta_pts": -1.4000000000000012,
+      "b": 11,
+      "c": 18,
+      "n_discordant": 29,
+      "p_value": 0.2649308964610076
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "maxmin+none",
+      "baseline": "text_only",
+      "note": "vs the blind floor",
+      "delta_pts": 28.4,
+      "b": 163,
+      "c": 21,
+      "n_discordant": 184,
+      "p_value": 2.033246302138804e-28
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random+none",
+      "baseline": "text_only",
+      "note": "vs the blind floor",
+      "delta_pts": 28.199999999999996,
+      "b": 162,
+      "c": 21,
+      "n_discordant": 183,
+      "p_value": 3.6055709699032485e-28
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "maxmin_nomerge+none",
+      "baseline": "text_only",
+      "note": "vs the blind floor",
+      "delta_pts": 28.599999999999998,
+      "b": 163,
+      "c": 20,
+      "n_discordant": 183,
+      "p_value": 4.6092163437502584e-29
+    },
+    {
+      "rho1": 0.75,
+      "rho2": 1.0,
+      "selector": "random_nomerge+none",
+      "baseline": "text_only",
+      "note": "vs the blind floor",
+      "delta_pts": 27.999999999999996,
+      "b": 161,
+      "c": 21,
+      "n_discordant": 182,
+      "p_value": 6.38935890627252e-28
+    }
+  ],
+  "per_task_seen": {
+    "EgoSchema": 500
+  },
+  "accuracy_by_task": {
+    "EgoSchema": {
+      "full": 0.608,
+      "text_only": 0.314,
+      "maxmin+none@0.75/1": 0.598,
+      "random+none@0.75/1": 0.596,
+      "maxmin_nomerge+none@0.75/1": 0.6,
+      "random_nomerge+none@0.75/1": 0.594
+    }
+  },
+  "skipped": []
+}
